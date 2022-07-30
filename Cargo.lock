@@ -50,6 +50,8 @@ dependencies = [
  "clap",
  "crossbeam",
  "crossbeam-utils",
+ "futures",
+ "log",
  "rand",
  "rdkafka",
  "serde_json",
