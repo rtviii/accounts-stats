@@ -177,10 +177,9 @@ pub fn spawn_consumer_in_scope<'a>(
                     };
                     let off = message.offset();
                     println!("Got offset: {}", off);
-                    // let sz = std::mem::size_of_val(message.payload().unwrap() );
-                    // println!("Thread {:?} message with offset :{:?} size = {:?}", std::thread::current().id(),off,sz);
-
-                    // send_to_master.send(off).unwrap();
+                    let sz = std::mem::size_of_val(message.payload().unwrap() );
+                    println!("Thread {:?} message with offset :{:?} size = {:?}", std::thread::current().id(),off,sz);
+                    send_to_master.send(off).unwrap();
                 }
                 None => {
                     println!("NONE")
