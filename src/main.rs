@@ -4,14 +4,15 @@ use clap::Parser;
 use crossbeam::thread::{self, Scope};
 use log::{info, warn};
 use rdkafka::client::ClientContext;
-use rdkafka::config::ClientConfig;
+use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::base_consumer::{self, BaseConsumer};
-use rdkafka::consumer::Consumer;
+use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::error::KafkaError;
 use rdkafka::producer::ThreadedProducer;
 use rdkafka::producer::{DeliveryResult, ProducerContext};
 use rdkafka::Message;
 use rdkafka::TopicPartitionList;
+use rdkafka::util::TokioRuntime;
 
 use std::{
     sync::mpsc::{self, Sender},
@@ -54,6 +55,33 @@ pub struct Args {
     start_end: (u64, u64),
 }
 
+pub fn streamconsumer_init(
+    port: usize,
+    consumer_group: &str,
+    offset_range: &[u64],
+    topic: &str,
+) -> Result<StreamConsumer, KafkaError> {
+    let sconsumer = {
+        let c: StreamConsumer = ClientConfig::new()
+            .set("bootstrap.servers", format!("127.0.0.1:{}", port))
+            .set("enable.partition.eof", "false")
+            .set("session.timeout.ms", "60000")
+            .set("enable.auto.commit", "true")
+            .set("fetch.wait.max.ms", "1000")
+            // .set("batch.num.messages", "1")
+            .set("group.id", consumer_group)
+            .set_log_level(RDKafkaLogLevel::Debug)
+            .create()
+            .expect("Failed to create consumer");
+        c
+    };
+
+    let mut tpl = TopicPartitionList::new();
+    tpl.add_partition_offset(topic, 0, rdkafka::Offset::Offset(offset_range[0] as i64))?;
+    sconsumer.assign(&tpl)?;
+    Ok(sconsumer)
+}
+
 pub fn baseconsumer_init(
     port: usize,
     consumer_group: &str,
@@ -80,31 +108,29 @@ pub fn baseconsumer_init(
     Ok(bconsumer)
 }
 
-fn main() {
-
-    let args       = Args::parse();
-    let flag_cons  = args.consumer;
-    let flag_prod  = args.producer;
-    let port       = &args.broker_port;
+#[tokio::main]
+async fn main() {
+    let args = Args::parse();
+    let flag_cons = args.consumer;
+    let flag_prod = args.producer;
+    let port = &args.broker_port;
     let topic_name = &args.topic_name;
-    let nthreads   = args.n_threads;
+    let nthreads = args.n_threads;
     // let workload       = &args.process_n_messages;
     let startend = args.start_end;
 
     let timer = timer::Timer::new();
 
+    let (tx, rx): (std::sync::mpsc::Sender<u64>, std::sync::mpsc::Receiver<u64>) = mpsc::channel();
 
-
-
-    let (tx, rx):(std::sync::mpsc::Sender<u64>, std::sync::mpsc::Receiver<u64>) = mpsc::channel();
     timer.schedule_repeating(chrono::Duration::seconds(2), move || {
         let mut totalbytes = 0;
         loop {
-            match rx.recv(){
-                Ok(message)=>{
+            match rx.recv() {
+                Ok(message) => {
                     totalbytes += message;
-                },
-                Err(e)=>{
+                }
+                Err(e) => {
                     println!("Timer failed")
                 }
             }
@@ -114,7 +140,7 @@ fn main() {
     // -------------------------------------------------------------------------------
     // create n_threads equal chunks ranging from start_end[0] to start_end[1]
     let offsets = (startend.0..startend.1).collect::<Vec<u64>>();
-    let chunks  = offsets.chunks(offsets.len() / nthreads as usize);
+    let chunks = offsets.chunks(offsets.len() / nthreads as usize);
 
     let consumer_group = &args
         .consumer_group
@@ -124,16 +150,12 @@ fn main() {
 
     let _ = thread::scope(|s| -> Result<(), KafkaError> {
         for c in chunks {
-            let bconsumer = baseconsumer_init(*port, consumer_group, c, &topic_name)?;
-            let _ = spawn_consumer_in_scope(
-                bconsumer,
-                c[c.len()-1],
-                s,
-                tx.clone()
-            );
+            let sconsumer = streamconsumer_init(*port, consumer_group, c, &topic_name)?;
+            let _ = spawn_stream_consumer_in_scope(sconsumer, c[c.len() - 1], s, tx.clone());
         }
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
 
     // -------------------------------------------------------------------------------
     // loop {
@@ -151,15 +173,84 @@ fn main() {
     // -------------------------------------------------------------------------------
 }
 
-
-
 pub fn threcho(msg: &str) {
     println!("[{:?}]: {}", std::thread::current().id(), msg);
 }
 
+pub fn spawn_stream_consumer_in_scope<'a>(
+    consumer: StreamConsumer,
+    halt_at_offset: u64,
+    crossbeam_scope: &Scope<'a>,
+    send_to_master: Sender<i64>,
+) -> Result<(), KafkaError> {
+    crossbeam_scope.spawn(
+        
+        move |_| -> Result<(), KafkaError> {
+
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+            loop{
+                let m =rt.block_on(consumer.recv());
+                match m {
+                        Err(e) => warn!("Kafka error: {}", e),
+                        Ok(m) => {println!("{:?}", m.offset());}
+                }
+            }
+
+        // match  {
+        //     Err(e) => warn!("Kafka error: {}", e),
+        //     Ok(m) => {
+        //         let payload = match m.payload_view::<str>() {
+        //             None => "",
+        //             Some(Ok(s)) => s,
+        //             Some(Err(e)) => {
+        //                 warn!("Error while deserializing message payload: {:?}", e);
+        //                 ""
+        //             }
+        //         };
+        //         info!("key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
+        //               m.key(), payload, m.topic(), m.partition(), m.offset(), m.timestamp());
+        //         if let Some(headers) = m.headers() {
+        //             for header in headers.iter() {
+        //                 info!("  Header {:#?}: {:?}", header.key, header.value);
+        //             }
+        //         }
+        //         consumer.commit_message(&m, CommitMode::Async).unwrap();
+        //     }
+        // };
+
+
+        // match consumer.poll(Duration::from_millis(1000)) {
+        //     Some(m) => {
+        //         let message = match m {
+        //             Ok(bm) =>{
+        //                 bm
+        //             },
+        //             Err(e)=>{
+        //                 panic!("Go error! {}", e);
+        //             }
+        //         };
+        //         let off = message.offset();
+        //         println!("Got offset: {}", off);
+        //         let sz = std::mem::size_of_val(message.payload().unwrap() );
+        //         println!("Thread {:?} message with offset :{:?} size = {:?}", std::thread::current().id(),off,sz);
+        //         send_to_master.send(off).unwrap();
+        //     }
+        //     None => {
+        //         println!("NONE")
+        //         // println!("No message");
+        //     }
+        // }
+        // Ok(())
+    });
+    Ok(())
+}
 pub fn spawn_consumer_in_scope<'a>(
     consumer: BaseConsumer,
-    halt_at_offset:u64,
+    halt_at_offset: u64,
     crossbeam_scope: &Scope<'a>,
     send_to_master: Sender<i64>,
 ) -> Result<(), KafkaError> {
@@ -168,17 +259,20 @@ pub fn spawn_consumer_in_scope<'a>(
             match consumer.poll(Duration::from_millis(1000)) {
                 Some(m) => {
                     let message = match m {
-                        Ok(bm) =>{
-                            bm
-                        },
-                        Err(e)=>{
+                        Ok(bm) => bm,
+                        Err(e) => {
                             panic!("Go error! {}", e);
                         }
                     };
                     let off = message.offset();
                     println!("Got offset: {}", off);
-                    let sz = std::mem::size_of_val(message.payload().unwrap() );
-                    println!("Thread {:?} message with offset :{:?} size = {:?}", std::thread::current().id(),off,sz);
+                    let sz = std::mem::size_of_val(message.payload().unwrap());
+                    println!(
+                        "Thread {:?} message with offset :{:?} size = {:?}",
+                        std::thread::current().id(),
+                        off,
+                        sz
+                    );
                     send_to_master.send(off).unwrap();
                 }
                 None => {
