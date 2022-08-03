@@ -26,7 +26,6 @@ pub fn parse_tuple(tup: &str) -> Result<(u64, u64), std::string::ParseError> {
         .into_iter()
         .map(|x| x.parse::<u64>().unwrap())
         .collect();
-
     Ok((startend[0], startend[1]))
 }
 
@@ -65,16 +64,16 @@ pub fn baseconsumer_init(
         let c: BaseConsumer = ClientConfig::new()
             .set("bootstrap.servers", format!("127.0.0.1:{}", port))
             .set("enable.partition.eof", "false")
-            .set("session.timeout.ms", "6000")
+            .set("session.timeout.ms", "60000")
             .set("enable.auto.commit", "true")
-            .set("fetch.wait.max.ms", "100")
-            .set("batch.num.messages", "1")
-            // .set("enable.auto.commit", "false")
+            .set("fetch.wait.max.ms", "1000")
+            // .set("batch.num.messages", "1")
             .set("group.id", consumer_group)
             .create()
             .expect("Failed to create consumer");
         c
     };
+
     let mut tpl = TopicPartitionList::new();
     tpl.add_partition_offset(topic, 0, rdkafka::Offset::Offset(offset_range[0] as i64))?;
     bconsumer.assign(&tpl)?;
@@ -82,18 +81,40 @@ pub fn baseconsumer_init(
 }
 
 fn main() {
-    let args = Args::parse();
-    let flag_cons = args.consumer;
-    let flag_prod = args.producer;
-    let port = &args.broker_port;
+
+    let args       = Args::parse();
+    let flag_cons  = args.consumer;
+    let flag_prod  = args.producer;
+    let port       = &args.broker_port;
     let topic_name = &args.topic_name;
-    let nthreads = args.n_threads;
+    let nthreads   = args.n_threads;
     // let workload       = &args.process_n_messages;
     let startend = args.start_end;
 
+    let timer = timer::Timer::new();
+
+
+
+
+    let (tx, rx):(std::sync::mpsc::Sender<u64>, std::sync::mpsc::Receiver<u64>) = mpsc::channel();
+    timer.schedule_repeating(chrono::Duration::seconds(2), move || {
+        let mut totalbytes = 0;
+        loop {
+            match rx.recv(){
+                Ok(message)=>{
+                    totalbytes += message;
+                },
+                Err(e)=>{
+                    println!("Timer failed")
+                }
+            }
+        }
+    });
+
+    // -------------------------------------------------------------------------------
     // create n_threads equal chunks ranging from start_end[0] to start_end[1]
     let offsets = (startend.0..startend.1).collect::<Vec<u64>>();
-    let chunks = offsets.chunks(offsets.len() / nthreads as usize);
+    let chunks  = offsets.chunks(offsets.len() / nthreads as usize);
 
     let consumer_group = &args
         .consumer_group
@@ -112,21 +133,25 @@ fn main() {
             );
         }
         Ok(())
-    })
-    .unwrap();
+    }).unwrap();
 
-    loop {
-        match rx.recv() {
-            Ok(msg) => {
-                threcho(&format!("Got {}", msg));
-            }
-            Err(e) => {
-                println!("{}", e);
-                std::thread::sleep(Duration::from_secs(2));
-            }
-        }
-    }
+    // -------------------------------------------------------------------------------
+    // loop {
+    //     match rx.recv() {
+    //         Ok(msg) => {
+    //             threcho(&format!("Got {}", msg));
+    //         }
+    //         Err(e) => {
+    //             println!("{}", e);
+    //             std::thread::sleep(Duration::from_secs(2));
+    //         }
+    //     }
+    // }
+
+    // -------------------------------------------------------------------------------
 }
+
+
 
 pub fn threcho(msg: &str) {
     println!("[{:?}]: {}", std::thread::current().id(), msg);
@@ -142,7 +167,14 @@ pub fn spawn_consumer_in_scope<'a>(
         loop {
             match consumer.poll(Duration::from_millis(1000)) {
                 Some(m) => {
-                    let message = m?;
+                    let message = match m {
+                        Ok(bm) =>{
+                            bm
+                        },
+                        Err(e)=>{
+                            panic!("Go error! {}", e);
+                        }
+                    };
                     let off = message.offset();
                     let sz = std::mem::size_of_val(message.payload().unwrap() );
                     println!("Thread {:?} message with offset :{:?} size = {:?}", std::thread::current().id(),off,sz);
@@ -150,6 +182,7 @@ pub fn spawn_consumer_in_scope<'a>(
                     send_to_master.send(off).unwrap();
                 }
                 None => {
+                    println!("NONE")
                     // println!("No message");
                 }
             }
