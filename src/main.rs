@@ -12,7 +12,9 @@ use rdkafka::producer::ThreadedProducer;
 use rdkafka::producer::{DeliveryResult, ProducerContext};
 use rdkafka::Message;
 use rdkafka::TopicPartitionList;
-use sb3_sqlite::{create_statistics_tables, insert_block_stat, upsert_account, block_ops,merge_btree_maps,merge_hmaps};
+use sb3_sqlite::{create_statistics_tables, insert_block_stat, upsert_account, block_ops,merge_btree_maps,merge_hmaps, AccountProfile};
+use serde_json::Value;
+use std::collections::{BTreeMap, HashMap};
 use std::process::exit;
 
 use std::{
@@ -48,6 +50,9 @@ pub struct Args {
 
     #[clap(short = 't', long)]
     topic_name: String,
+
+    #[clap(short, long)]
+    output_db: String,
 
     #[clap(long)]
     n_threads: u64,
@@ -90,26 +95,30 @@ fn main() {
     let port       = &args.broker_port;
     let topic_name = &args.topic_name;
     let nthreads   = args.n_threads;
+    let outputdb   = args.output_db;
     // let workload       = &args.process_n_messages;
     let startend = args.start_end;
     let timer = timer::Timer::new();
 
 
-    let (tx, rx):(std::sync::mpsc::Sender<u64>, std::sync::mpsc::Receiver<u64>) = mpsc::channel();
-    timer.schedule_repeating(chrono::Duration::seconds(2), move || {
-        let mut totalbytes = 0;
-        loop {
-            match rx.recv(){
-                Ok(message)=>{
-                    totalbytes += message;
-                },
-                Err(e)=>{
-                    println!("Timer failed")
-                }
-            }
-        }
-    });
+    // TODO: Implement timer and associated stats 
+    // timer.schedule_repeating(chrono::Duration::seconds(2), move || {
+    //     let mut totalbytes = 0;
+    //     loop {
+    //         match rx.recv(){
+    //             Ok(message)=>{
+    //                 totalbytes += message;
+    //             },
+    //             Err(e)=>{
+    //                 println!("Timer failed")
+    //             }
+    //         }
+    //     }
+    // });
 
+
+    let ( mpsc_sx, mpsc_rx )= mpsc::channel::<(BTreeMap<String, AccountProfile>,HashMap<( String,u64 ), (u64,f64)> )>();
+    let dbconn = create_statistics_tables(&outputdb).expect(&format!("Could not created sqlite file {}.", &outputdb));
     // -------------------------------------------------------------------------------
     // create n_threads equal chunks ranging from start_end[0] to start_end[1]
     let offsets = (startend.0..startend.1).collect::<Vec<u64>>();
@@ -120,10 +129,12 @@ fn main() {
 
     let (tx, rx) = mpsc::channel();
     let _ = thread::scope(|s| -> Result<(), KafkaError> {
+
+
+
         for chunk in chunks {
             let bconsumer = baseconsumer_init(*port, consumer_group, chunk, &topic_name)?;
-
-            let _ = spawn_consumer_in_scope(
+            let _ = spawn_consumer_thread_in_scope(
                 bconsumer,
                 chunk[chunk.len()-1],
                 s,
@@ -155,18 +166,39 @@ pub fn threcho(msg: &str) {
     println!("[{:?}]: {}", std::thread::current().id(), msg);
 }
 
-pub fn spawn_consumer_in_scope<'a>(
+
+pub enum BlockProcessingError{
+    KafkaError(KafkaError),
+    SqliteError(),
+    OtherError(),
+}
+
+// pub fn process_block(
+//     block:&Value, 
+//     block_stats_map, 
+//     block_accounts_map
+// )->Result<(), BlockProcessingError>{
+
+// }
+
+pub fn spawn_consumer_thread_in_scope<'a>(
     consumer       : BaseConsumer,
     halt_at_offset : u64,
     crossbeam_scope: &Scope<'a>,
     send_to_master: Sender<i64>,
 ) -> Result<(), KafkaError> {
     crossbeam_scope.spawn(move |_| -> Result<(), KafkaError> {
+
+        let mut per_thread_map:BTreeMap<String,      AccountProfile> = BTreeMap::new();
+        let mut blocks_stats:  HashMap<( String,u64 ), (u64,f64)>      = HashMap::new();
+
         loop {
             match consumer.poll(Duration::from_millis(1000)) {
                 Some(m) => {
                     let message = match m {
-                        Ok (bm) =>{bm                        },
+                        Ok (bm) =>{
+                            
+                            bm                        },
                         Err(e ) =>{panic!("Go error! {}", e);}
                     };
                     let off = message.offset();
