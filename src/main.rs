@@ -12,7 +12,7 @@ use rdkafka::producer::ThreadedProducer;
 use rdkafka::producer::{DeliveryResult, ProducerContext};
 use rdkafka::Message;
 use rdkafka::TopicPartitionList;
-use sb3_sqlite::{create_statistics_tables, insert_block_stat, upsert_account, block_ops,merge_btree_maps,merge_hmaps, AccountProfile};
+use sb3_sqlite::{create_statistics_tables, insert_block_stat, upsert_account, block_ops,merge_btree_maps,merge_hmaps, AccountProfile, process_tx};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::process::exit;
@@ -171,17 +171,43 @@ pub enum BlockProcessingError{
     OtherError(),
 }
 
+fn count_tx__ix_per_tx(transactions:&Vec<Value>)->( usize,f64 ){
+    let (txnum , mut ix_num ) = ( transactions.len(), 0 );
+    for tx in transactions.iter() {
+        let tx_ix = tx["transaction"]["message"]["instructions"].as_array().unwrap();
+        ix_num += tx_ix.len() as usize;
+    }
+    (txnum, ( ix_num/txnum ) as f64)
+}
+
+
+#[derive(Debug)]
+pub struct BlockStatsRow{
+    blockhash  : String,
+    blockheight: u64,
+    txnum      : u64,
+    ixpertx    : f64,
+}
 pub fn block_extract_statistics(
-    block             : &Value,
-    block_stats_map   : &mut HashMap<( String,u64 ), (u64,f64)>,
-    block_accounts_map: &mut BTreeMap<String,AccountProfile>,
+    block             : Value
+// )->Result<(BTreeMap<String,AccountProfile>,BlockStatsRow), BlockProcessingError>{
 )->Result<(), BlockProcessingError>{
+    // let mut block_map = BTreeMap::new();
+    // let transactions  = block["transactions"].as_array().expect("Didn't find transactions");
 
-
-    println!("Got parsed val {}", block);
-
+    println!("{:?}", block);
+    let blockheight   = block["blockHeight"].as_u64().expect("Didn't find blockheight");
+    println!("Blockheight: {}", blockheight);
+    // let blockhash     = (block["blockhash"]).as_str().expect("Didn't find blockhhash").to_string();
+    // let (tx,ixpertx)  = count_tx__ix_per_tx(transactions);
+    // for tx in transactions.iter() {
+    //     let _ = process_tx(&tx["transaction"], &mut block_map);
+    // }
+    // println!("Returning stats, {:?}", BlockStatsRow{blockhash: blockhash.clone(), blockheight: blockheight, txnum: tx as u64, ixpertx: ixpertx});
+    // Ok((block_map, BlockStatsRow{blockhash, blockheight: blockheight, txnum: tx as u64, ixpertx: ixpertx}))
     Ok(())
 }
+
 
 pub fn spawn_consumer_thread_in_scope<'a>(
     consumer       : BaseConsumer,
@@ -199,8 +225,9 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                 Some(m) => {
                     let message = match m {
                         Ok (bm) =>{
-                            let parsedval = serde_json::from_slice::<Value>(&bm.payload().unwrap());
-                            block_extract_statistics(&parsedval.unwrap(), &mut blocks_stats, &mut per_thread_map)?;
+                            let parsedval:Value = serde_json::from_slice::<Value>(&bm.payload().unwrap()).unwrap();
+                            // println!("{:?}", parsedval);
+                            block_extract_statistics(parsedval)?;
                             bm
                         },
                         Err(e ) =>{panic!("Message receive error! {}", e);}
