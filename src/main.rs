@@ -204,6 +204,7 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                             let parsedval = serde_json::from_slice(
                                 &bm.payload().ok_or(BlockProcessingError::KafkaError())?)
                                 .map_err(|e| BlockProcessingError::SerdeError())?;
+                                println!("{:?}", parsedval);
                                 bm
                             // block_extract_statistics(&bm.payload(), &mut blocks_stats, &mut per_thread_map)?;
                         },
