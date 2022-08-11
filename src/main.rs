@@ -168,18 +168,22 @@ pub fn threcho(msg: &str) {
 
 
 pub enum BlockProcessingError{
-    KafkaError(KafkaError),
+    KafkaError(),
+    SerdeError(),
     SqliteError(),
     OtherError(),
 }
 
-// pub fn process_block(
-//     block:&Value, 
-//     block_stats_map, 
-//     block_accounts_map
-// )->Result<(), BlockProcessingError>{
+pub fn block_extract_statistics(
+    block             : &Value,
+    block_stats_map   : &mut HashMap<( String,u64 ), (u64,f64)>,
+    block_accounts_map: &mut BTreeMap<String,AccountProfile>,
+)->Result<(), BlockProcessingError>{
 
-// }
+
+
+    Ok(())
+}
 
 pub fn spawn_consumer_thread_in_scope<'a>(
     consumer       : BaseConsumer,
@@ -187,7 +191,7 @@ pub fn spawn_consumer_thread_in_scope<'a>(
     crossbeam_scope: &Scope<'a>,
     send_to_master: Sender<i64>,
 ) -> Result<(), KafkaError> {
-    crossbeam_scope.spawn(move |_| -> Result<(), KafkaError> {
+    crossbeam_scope.spawn(move |_| -> Result<(), BlockProcessingError> {
 
         let mut per_thread_map:BTreeMap<String,      AccountProfile> = BTreeMap::new();
         let mut blocks_stats:  HashMap<( String,u64 ), (u64,f64)>      = HashMap::new();
@@ -197,8 +201,12 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                 Some(m) => {
                     let message = match m {
                         Ok (bm) =>{
-                            
-                            bm                        },
+                            let parsedval = serde_json::from_slice(
+                                &bm.payload().ok_or(BlockProcessingError::KafkaError())?)
+                                .map_err(|e| BlockProcessingError::SerdeError())?;
+                                bm
+                            // block_extract_statistics(&bm.payload(), &mut blocks_stats, &mut per_thread_map)?;
+                        },
                         Err(e ) =>{panic!("Go error! {}", e);}
                     };
                     let off = message.offset();
