@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+sb3-sqlite = { path = "../sb-backend-3-lib/crates/sqlite/" }
 crossbeam       = "0.8"
 crossbeam-utils = "0.8.11"
 rdkafka         = "0.28.0"

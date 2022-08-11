@@ -12,6 +12,8 @@ use rdkafka::producer::ThreadedProducer;
 use rdkafka::producer::{DeliveryResult, ProducerContext};
 use rdkafka::Message;
 use rdkafka::TopicPartitionList;
+use sb3_sqlite::{create_statistics_tables, insert_block_stat, upsert_account, block_ops,merge_btree_maps,merge_hmaps};
+use std::process::exit;
 
 use std::{
     sync::mpsc::{self, Sender},
@@ -90,10 +92,7 @@ fn main() {
     let nthreads   = args.n_threads;
     // let workload       = &args.process_n_messages;
     let startend = args.start_end;
-
     let timer = timer::Timer::new();
-
-
 
 
     let (tx, rx):(std::sync::mpsc::Sender<u64>, std::sync::mpsc::Receiver<u64>) = mpsc::channel();
@@ -115,19 +114,18 @@ fn main() {
     // create n_threads equal chunks ranging from start_end[0] to start_end[1]
     let offsets = (startend.0..startend.1).collect::<Vec<u64>>();
     let chunks  = offsets.chunks(offsets.len() / nthreads as usize);
-
     let consumer_group = &args
         .consumer_group
         .unwrap_or("default_consumer_group".to_string());
 
     let (tx, rx) = mpsc::channel();
-
     let _ = thread::scope(|s| -> Result<(), KafkaError> {
-        for c in chunks {
-            let bconsumer = baseconsumer_init(*port, consumer_group, c, &topic_name)?;
+        for chunk in chunks {
+            let bconsumer = baseconsumer_init(*port, consumer_group, chunk, &topic_name)?;
+
             let _ = spawn_consumer_in_scope(
                 bconsumer,
-                c[c.len()-1],
+                chunk[chunk.len()-1],
                 s,
                 tx.clone()
             );
@@ -158,8 +156,8 @@ pub fn threcho(msg: &str) {
 }
 
 pub fn spawn_consumer_in_scope<'a>(
-    consumer: BaseConsumer,
-    halt_at_offset:u64,
+    consumer       : BaseConsumer,
+    halt_at_offset : u64,
     crossbeam_scope: &Scope<'a>,
     send_to_master: Sender<i64>,
 ) -> Result<(), KafkaError> {
@@ -168,25 +166,24 @@ pub fn spawn_consumer_in_scope<'a>(
             match consumer.poll(Duration::from_millis(1000)) {
                 Some(m) => {
                     let message = match m {
-                        Ok(bm) =>{
-                            bm
-                        },
-                        Err(e)=>{
-                            panic!("Go error! {}", e);
-                        }
+                        Ok (bm) =>{bm                        },
+                        Err(e ) =>{panic!("Go error! {}", e);}
                     };
                     let off = message.offset();
-                    println!("Got offset: {}", off);
-                    let sz = std::mem::size_of_val(message.payload().unwrap() );
+                    if off == halt_at_offset as i64{
+                        println!("Consumer reached halt offset {}", off);
+                        break;
+                    }
+                    let sz  = std::mem::size_of_val(message.payload().unwrap() );
                     println!("Thread {:?} message with offset :{:?} size = {:?}", std::thread::current().id(),off,sz);
                     send_to_master.send(off).unwrap();
                 }
                 None => {
-                    println!("NONE")
-                    // println!("No message");
+                    println!("No message.")
                 }
             }
         }
+        Ok(())
     });
     Ok(())
 }
