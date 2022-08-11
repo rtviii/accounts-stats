@@ -129,9 +129,6 @@ fn main() {
 
     let (tx, rx) = mpsc::channel();
     let _ = thread::scope(|s| -> Result<(), KafkaError> {
-
-
-
         for chunk in chunks {
             let bconsumer = baseconsumer_init(*port, consumer_group, chunk, &topic_name)?;
             let _ = spawn_consumer_thread_in_scope(
@@ -181,6 +178,7 @@ pub fn block_extract_statistics(
 )->Result<(), BlockProcessingError>{
 
 
+    println!("Got parsed val {}", block);
 
     Ok(())
 }
@@ -197,20 +195,19 @@ pub fn spawn_consumer_thread_in_scope<'a>(
         let mut blocks_stats:  HashMap<( String,u64 ), (u64,f64)>      = HashMap::new();
 
         loop {
-            match consumer.poll(Duration::from_millis(1000)) {
+            match consumer.poll(Duration::from_millis(2000)) {
                 Some(m) => {
                     let message = match m {
                         Ok (bm) =>{
-                            let parsedval = serde_json::from_slice(
-                                &bm.payload().ok_or(BlockProcessingError::KafkaError())?)
-                                .map_err(|e| BlockProcessingError::SerdeError())?;
-                                println!("{:?}", parsedval);
-                                bm
-                            // block_extract_statistics(&bm.payload(), &mut blocks_stats, &mut per_thread_map)?;
+                            let parsedval = serde_json::from_slice::<Value>(&bm.payload().unwrap());
+                            block_extract_statistics(&parsedval.unwrap(), &mut blocks_stats, &mut per_thread_map)?;
+                            bm
                         },
-                        Err(e ) =>{panic!("Go error! {}", e);}
+                        Err(e ) =>{panic!("Message receive error! {}", e);}
                     };
+
                     let off = message.offset();
+                    // println!("{:?}", off);
                     if off == halt_at_offset as i64{
                         println!("Consumer reached halt offset {}", off);
                         break;
@@ -224,8 +221,10 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                 }
             }
         }
+        println!("Exited loop");
         Ok(())
     });
+    println!("returned thread");
     Ok(())
 }
 
