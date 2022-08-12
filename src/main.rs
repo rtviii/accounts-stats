@@ -172,12 +172,12 @@ pub enum BlockProcessingError{
 }
 
 fn count_tx__ix_per_tx(transactions:&Vec<Value>)->( usize,f64 ){
-    let (txnum , mut ix_num ) = ( transactions.len(), 0 );
+    let ( txnum, mut ix_num )      = (transactions.len(),0);
     for tx in transactions.iter() {
-        let tx_ix = tx["transaction"]["message"]["instructions"].as_array().unwrap();
-        ix_num += tx_ix.len() as usize;
+        let tx_ixs = tx["transaction"]["message"]["instructions"].as_array().unwrap();
+        ix_num += tx_ixs.len() as usize;
     }
-    (txnum, ( ix_num/txnum ) as f64)
+    (txnum,  ix_num as f64 /txnum as f64 )
 }
 
 
@@ -190,22 +190,16 @@ pub struct BlockStatsRow{
 }
 pub fn block_extract_statistics(
     block             : Value
-// )->Result<(BTreeMap<String,AccountProfile>,BlockStatsRow), BlockProcessingError>{
-)->Result<(), BlockProcessingError>{
-    // let mut block_map = BTreeMap::new();
-    // let transactions  = block["transactions"].as_array().expect("Didn't find transactions");
-
-    println!("{:?}", block);
+)->Result<(BTreeMap<String,AccountProfile>,BlockStatsRow), BlockProcessingError>{
+    let mut block_map = BTreeMap::new();
+    let transactions  = block["transactions"].as_array().expect("Didn't find transactions");
     let blockheight   = block["blockHeight"].as_u64().expect("Didn't find blockheight");
-    println!("Blockheight: {}", blockheight);
-    // let blockhash     = (block["blockhash"]).as_str().expect("Didn't find blockhhash").to_string();
-    // let (tx,ixpertx)  = count_tx__ix_per_tx(transactions);
-    // for tx in transactions.iter() {
-    //     let _ = process_tx(&tx["transaction"], &mut block_map);
-    // }
-    // println!("Returning stats, {:?}", BlockStatsRow{blockhash: blockhash.clone(), blockheight: blockheight, txnum: tx as u64, ixpertx: ixpertx});
-    // Ok((block_map, BlockStatsRow{blockhash, blockheight: blockheight, txnum: tx as u64, ixpertx: ixpertx}))
-    Ok(())
+    let blockhash     = (block["blockhash"]).as_str().expect("Didn't find blockhhash").to_string();
+    let (tx,ixpertx)  = count_tx__ix_per_tx(transactions);
+    for tx in transactions.iter() {
+        let _ = process_tx(&tx["transaction"], &mut block_map);
+    }
+    Ok((block_map, BlockStatsRow{blockhash, blockheight: blockheight, txnum: tx as u64, ixpertx: ixpertx}))
 }
 
 
