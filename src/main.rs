@@ -25,7 +25,7 @@ use std::{
     time::Duration,
 };
 
-const BATCH_SIZE:usize = 5;
+const BATCH_SIZE:usize = 1000;
 
 pub fn parse_tuple(tup: &str) -> Result<(u64, u64), std::string::ParseError> {
     let tup = tup.replace("(", "");
@@ -100,8 +100,8 @@ fn main() {
     let topic_name = &args.topic_name;
     let nthreads   = args.n_threads;
     let outputdb   = args.output_db;
-    let startend = args.start_end;
-    let timer    = timer::Timer::new();
+    let startend   = args.start_end;
+    let timer      = timer::Timer::new();
 
     let (mpsc_sx, mpsc_rx) = mpsc::channel::<(
         BTreeMap<String, AccountProfile>,
@@ -124,22 +124,18 @@ fn main() {
             loop {
                 match mpsc_receive.recv() {
                     Ok(msg) => {
-                        // threcho(&format!("[MASTER] Got {:?}", msg));
                         let (accounts_map, blockstats_map): (
                             BTreeMap<String, AccountProfile>,
                             HashMap<(String, u64), (u64, f64)>,
                         ) = msg;
 
-                        println!("Upserting {} accounts.", accounts_map.len());
                         for (address, profile) in accounts_map.iter() {
                             upsert_account(&dbconn, &address, &profile).unwrap();
                         }
 
-                        println!("Upserting {} blocks.", blockstats_map.len());
                         for ((bhash, bheight), (txcount, ixpertx)) in blockstats_map.iter() {
                             insert_block_stat(&dbconn, bhash, bheight, txcount, ixpertx).unwrap();
                         }
-
                     }
                     Err(e) => {
                         println!("{}", e);
@@ -162,15 +158,11 @@ fn main() {
     })
     .unwrap();
 
-    // -------------------------------------------------------------------------------
-
-    // -------------------------------------------------------------------------------
 }
 
 pub fn threcho(msg: &str) {
     println!("[{:?}]: {}", std::thread::current().id(), msg);
 }
-
 pub enum BlockProcessingError {
     KafkaError(),
     SerdeError(),
@@ -294,51 +286,3 @@ pub fn spawn_consumer_thread_in_scope<'a>(
     });
     Ok(())
 }
-
-// struct ProducerLogger {}
-// impl ClientContext for ProducerLogger {}
-// impl ProducerContext for ProducerLogger {
-//     type DeliveryOpaque = ();
-//     fn delivery(
-//         &self,
-//         delivery_result: &DeliveryResult<'_>,
-//         delivery_opaque: Self::DeliveryOpaque,
-//     ) {
-//         let delivery_res = delivery_result.as_ref();
-//         match delivery_res {
-//             Ok(message) => {
-//                 let key: &str = message.key_view().unwrap().unwrap();
-//                 println!(
-//                     "Produced message {} successfully. Offset: {}. Partition :{}",
-//                     key,
-//                     message.offset(),
-//                     message.partition()
-//                 )
-//                 // This would probably be a good place to commit offsets
-//             }
-
-//             Err(producer_err) => {
-//                 let key: &str = producer_err.1.key_view().unwrap().unwrap();
-//                 println!(
-//                     "Failed to produce message {}. Error: {}",
-//                     key, producer_err.0
-//                 )
-//             }
-//         }
-//     }
-// }
-// pub fn producer() {
-//     let producer: ThreadedProducer<ProducerLogger> = ClientConfig::new()
-//         .set("bootstrap.servers", "localhost:9095")
-//         .create_with_context(ProducerLogger {})
-//         .expect("Failed to create producer");
-// }
-
-// pub fn consumer() {
-//     let mut baseconsumer: BaseConsumer = ClientConfig::new()
-//         .set("bootstrap.servers", "127.0.0.1:9095")
-//         // .set("enable.auto.commit", "false")
-//         .set("group.id", "rt0")
-//         .create()
-//         .expect("Failed to create consumer");
-// }
