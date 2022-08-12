@@ -12,7 +12,10 @@ use rdkafka::producer::ThreadedProducer;
 use rdkafka::producer::{DeliveryResult, ProducerContext};
 use rdkafka::Message;
 use rdkafka::TopicPartitionList;
-use sb3_sqlite::{create_statistics_tables, insert_block_stat, upsert_account, block_ops,merge_btree_maps,merge_hmaps, AccountProfile, process_tx};
+use sb3_sqlite::{
+    block_ops, create_statistics_tables, insert_block_stat, merge_btree_maps, merge_hmaps,
+    process_tx, upsert_account, AccountProfile,
+};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::process::exit;
@@ -88,164 +91,201 @@ pub fn baseconsumer_init(
 }
 
 fn main() {
-
-    let args       = Args::parse();
-    let flag_cons  = args.consumer;
-    let flag_prod  = args.producer;
-    let port       = &args.broker_port;
+    let args = Args::parse();
+    let flag_cons = args.consumer;
+    let flag_prod = args.producer;
+    let port = &args.broker_port;
     let topic_name = &args.topic_name;
-    let nthreads   = args.n_threads;
-    let outputdb   = args.output_db;
+    let nthreads = args.n_threads;
+    let outputdb = args.output_db;
     // let workload       = &args.process_n_messages;
     let startend = args.start_end;
     let timer = timer::Timer::new();
 
-
-    // TODO: Implement timer and associated stats 
-    // timer.schedule_repeating(chrono::Duration::seconds(2), move || {
-    //     let mut totalbytes = 0;
-    //     loop {
-    //         match rx.recv(){
-    //             Ok(message)=>{
-    //                 totalbytes += message;
-    //             },
-    //             Err(e)=>{
-    //                 println!("Timer failed")
-    //             }
-    //         }
-    //     }
-    // });
-
-
-    let ( mpsc_sx, mpsc_rx )= mpsc::channel::<(BTreeMap<String, AccountProfile>,HashMap<( String,u64 ), (u64,f64)> )>();
-    let dbconn = create_statistics_tables(&outputdb).expect(&format!("Could not created sqlite file {}.", &outputdb));
+    let (mpsc_sx, mpsc_rx) = mpsc::channel::<(
+        BTreeMap<String, AccountProfile>,
+        HashMap<(String, u64), (u64, f64)>,
+    )>();
     // -------------------------------------------------------------------------------
     // create n_threads equal chunks ranging from start_end[0] to start_end[1]
     let offsets = (startend.0..startend.1).collect::<Vec<u64>>();
-    let chunks  = offsets.chunks(offsets.len() / nthreads as usize);
+    let chunks = offsets.chunks(offsets.len() / nthreads as usize);
     let consumer_group = &args
         .consumer_group
         .unwrap_or("default_consumer_group".to_string());
 
-    let (tx, rx) = mpsc::channel();
+    let (mpsc_send, mpsc_receive) = mpsc::channel();
+
     let _ = thread::scope(|s| -> Result<(), KafkaError> {
+        s.spawn(move |_| {
+            let dbconn = create_statistics_tables(&outputdb)
+                .expect(&format!("Could not created sqlite file {}.", &outputdb));
+            // global_map     = merge_btree_maps(global_map, returned_blocks);
+            loop {
+                match mpsc_receive.recv() {
+                    Ok(msg) => {
+                        threcho(&format!("[MASTER] Got {:?}", msg));
+                        let (accounts_map, blockstats_map): (
+                            BTreeMap<String, AccountProfile>,
+                            HashMap<(String, u64), (u64, f64)>,
+                        ) = msg;
+                        for (address, profile) in accounts_map.iter() {
+                            let _ = upsert_account(&dbconn, &address, &profile);
+                        }
+
+                        for ((bhash, bheight), (txcount, ixpertx)) in blockstats_map.iter() {
+                            let _ = insert_block_stat(&dbconn, bhash, bheight, txcount, ixpertx);
+                        }
+                    }
+                    Err(e) => {
+                        println!("{}", e);
+                        std::thread::sleep(Duration::from_secs(2));
+                    }
+                }
+            }
+        });
+
         for chunk in chunks {
             let bconsumer = baseconsumer_init(*port, consumer_group, chunk, &topic_name)?;
             let _ = spawn_consumer_thread_in_scope(
                 bconsumer,
-                chunk[chunk.len()-1],
+                chunk[chunk.len() - 1],
                 s,
-                tx.clone()
+                mpsc_send.clone(),
             );
         }
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
 
     // -------------------------------------------------------------------------------
-    // loop {
-    //     match rx.recv() {
-    //         Ok(msg) => {
-    //             threcho(&format!("Got {}", msg));
-    //         }
-    //         Err(e) => {
-    //             println!("{}", e);
-    //             std::thread::sleep(Duration::from_secs(2));
-    //         }
-    //     }
-    // }
 
     // -------------------------------------------------------------------------------
 }
-
-
 
 pub fn threcho(msg: &str) {
     println!("[{:?}]: {}", std::thread::current().id(), msg);
 }
 
-
-pub enum BlockProcessingError{
+pub enum BlockProcessingError {
     KafkaError(),
     SerdeError(),
     SqliteError(),
     OtherError(),
 }
 
-fn count_tx__ix_per_tx(transactions:&Vec<Value>)->( usize,f64 ){
-    let ( txnum, mut ix_num )      = (transactions.len(),0);
+fn count_tx__ix_per_tx(transactions: &Vec<Value>) -> (usize, f64) {
+    let (txnum, mut ix_num) = (transactions.len(), 0);
     for tx in transactions.iter() {
-        let tx_ixs = tx["transaction"]["message"]["instructions"].as_array().unwrap();
+        let tx_ixs = tx["transaction"]["message"]["instructions"]
+            .as_array()
+            .unwrap();
         ix_num += tx_ixs.len() as usize;
     }
-    (txnum,  ix_num as f64 /txnum as f64 )
+    (txnum, ix_num as f64 / txnum as f64)
 }
-
 
 #[derive(Debug)]
-pub struct BlockStatsRow{
-    blockhash  : String,
+pub struct BlockStatsRow {
+    blockhash: String,
     blockheight: u64,
-    txnum      : u64,
-    ixpertx    : f64,
+    txnum: u64,
+    ixpertx: f64,
 }
 pub fn block_extract_statistics(
-    block             : Value
-)->Result<(BTreeMap<String,AccountProfile>,BlockStatsRow), BlockProcessingError>{
+    block: Value,
+) -> Result<(BTreeMap<String, AccountProfile>, BlockStatsRow), BlockProcessingError> {
     let mut block_map = BTreeMap::new();
-    let transactions  = block["transactions"].as_array().expect("Didn't find transactions");
-    let blockheight   = block["blockHeight"].as_u64().expect("Didn't find blockheight");
-    let blockhash     = (block["blockhash"]).as_str().expect("Didn't find blockhhash").to_string();
-    let (tx,ixpertx)  = count_tx__ix_per_tx(transactions);
+    let transactions = block["transactions"]
+        .as_array()
+        .expect("Didn't find transactions");
+    let blockheight = block["blockHeight"]
+        .as_u64()
+        .expect("Didn't find blockheight");
+    let blockhash = (block["blockhash"])
+        .as_str()
+        .expect("Didn't find blockhhash")
+        .to_string();
+    let (tx, ixpertx) = count_tx__ix_per_tx(transactions);
+
     for tx in transactions.iter() {
         let _ = process_tx(&tx["transaction"], &mut block_map);
     }
-    Ok((block_map, BlockStatsRow{blockhash, blockheight: blockheight, txnum: tx as u64, ixpertx: ixpertx}))
+    Ok((
+        block_map,
+        BlockStatsRow {
+            blockhash,
+            blockheight: blockheight,
+            txnum: tx as u64,
+            ixpertx: ixpertx,
+        },
+    ))
 }
 
-
 pub fn spawn_consumer_thread_in_scope<'a>(
-    consumer       : BaseConsumer,
-    halt_at_offset : u64,
+    consumer: BaseConsumer,
+    halt_at_offset: u64,
     crossbeam_scope: &Scope<'a>,
-    send_to_master: Sender<i64>,
+    send_to_master: Sender<(
+        BTreeMap<String, AccountProfile>,
+        HashMap<(String, u64), (u64, f64)>,
+    )>,
 ) -> Result<(), KafkaError> {
     crossbeam_scope.spawn(move |_| -> Result<(), BlockProcessingError> {
-
-        let mut per_thread_map:BTreeMap<String,      AccountProfile> = BTreeMap::new();
-        let mut blocks_stats:  HashMap<( String,u64 ), (u64,f64)>      = HashMap::new();
+        let mut threadwide_account_stats: BTreeMap<String, AccountProfile> = BTreeMap::new();
+        let mut threadwide_blocks_stats: HashMap<(String, u64), (u64, f64)> = HashMap::new();
+        let mut processed_blocks = 1;
 
         loop {
-            match consumer.poll(Duration::from_millis(2000)) {
+            match consumer.poll(Duration::from_millis(500)) {
                 Some(m) => {
                     let message = match m {
-                        Ok (bm) =>{
-                            let parsedval:Value = serde_json::from_slice::<Value>(&bm.payload().unwrap()).unwrap();
-                            // println!("{:?}", parsedval);
-                            block_extract_statistics(parsedval)?;
+                        Ok(bm) => {
+                            let parsedval: Value =
+                                serde_json::from_slice::<Value>(&bm.payload().unwrap()).unwrap();
+                            let (accounts_stats, block_stats_row) =
+                                block_extract_statistics(parsedval)?;
+                            threadwide_account_stats =
+                                merge_btree_maps(threadwide_account_stats, accounts_stats);
+                            threadwide_blocks_stats.insert(
+                                (block_stats_row.blockhash, block_stats_row.blockheight),
+                                (block_stats_row.txnum, block_stats_row.ixpertx),
+                            );
+                            processed_blocks += 1;
+                            println!(
+                                "[{:?}] Processed blocks {}",
+                                std::thread::current().id(),
+                                processed_blocks
+                            );
                             bm
-                        },
-                        Err(e ) =>{panic!("Message receive error! {}", e);}
+                        }
+                        Err(e) => {
+                            panic!("Message receive error! {}", e);
+                        }
                     };
-
-                    let off = message.offset();
-                    // println!("{:?}", off);
-                    if off == halt_at_offset as i64{
-                        println!("Consumer reached halt offset {}", off);
+                    if message.offset() == halt_at_offset as i64 {
+                        println!("Consumer reached halt offset {}", halt_at_offset);
                         break;
                     }
-                    let sz  = std::mem::size_of_val(message.payload().unwrap() );
-                    println!("Thread {:?} message with offset :{:?} size = {:?}", std::thread::current().id(),off,sz);
-                    send_to_master.send(off).unwrap();
                 }
-                None => {
-                    println!("No message.")
-                }
+                None => {}
+            }
+
+            if processed_blocks % 10 == 0 {
+                send_to_master
+                    .send((threadwide_account_stats, threadwide_blocks_stats))
+                    .unwrap();
+                println!(
+                    "[{:?}] Processed 10 blocks. Sending batch to master.",
+                    std::thread::current().id()
+                );
+                threadwide_account_stats = BTreeMap::new();
+                threadwide_blocks_stats = HashMap::new();
+                processed_blocks = 1;
             }
         }
-        println!("Exited loop");
         Ok(())
     });
-    println!("returned thread");
     Ok(())
 }
 
