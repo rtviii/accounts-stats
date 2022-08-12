@@ -25,7 +25,7 @@ use std::{
     time::Duration,
 };
 
-const BATCH_SIZE:usize = 1000;
+const BATCH_SIZE:usize = 5;
 
 pub fn parse_tuple(tup: &str) -> Result<(u64, u64), std::string::ParseError> {
     let tup = tup.replace("(", "");
@@ -132,12 +132,12 @@ fn main() {
 
                         println!("Upserting {} accounts.", accounts_map.len());
                         for (address, profile) in accounts_map.iter() {
-                            let _ = upsert_account(&dbconn, &address, &profile);
+                            upsert_account(&dbconn, &address, &profile).unwrap();
                         }
 
                         println!("Upserting {} blocks.", blockstats_map.len());
                         for ((bhash, bheight), (txcount, ixpertx)) in blockstats_map.iter() {
-                            let _ = insert_block_stat(&dbconn, bhash, bheight, txcount, ixpertx);
+                            insert_block_stat(&dbconn, bhash, bheight, txcount, ixpertx).unwrap();
                         }
 
                     }
