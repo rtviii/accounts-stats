@@ -25,6 +25,8 @@ use std::{
     time::Duration,
 };
 
+const BATCH_SIZE:usize = 1000;
+
 pub fn parse_tuple(tup: &str) -> Result<(u64, u64), std::string::ParseError> {
     let tup = tup.replace("(", "");
     let tup = tup.replace(")", "");
@@ -91,16 +93,15 @@ pub fn baseconsumer_init(
 }
 
 fn main() {
-    let args = Args::parse();
-    let flag_cons = args.consumer;
-    let flag_prod = args.producer;
-    let port = &args.broker_port;
+    let args       = Args::parse();
+    let flag_cons  = args.consumer;
+    let flag_prod  = args.producer;
+    let port       = &args.broker_port;
     let topic_name = &args.topic_name;
-    let nthreads = args.n_threads;
-    let outputdb = args.output_db;
-    // let workload       = &args.process_n_messages;
+    let nthreads   = args.n_threads;
+    let outputdb   = args.output_db;
     let startend = args.start_end;
-    let timer = timer::Timer::new();
+    let timer    = timer::Timer::new();
 
     let (mpsc_sx, mpsc_rx) = mpsc::channel::<(
         BTreeMap<String, AccountProfile>,
@@ -120,22 +121,25 @@ fn main() {
         s.spawn(move |_| {
             let dbconn = create_statistics_tables(&outputdb)
                 .expect(&format!("Could not created sqlite file {}.", &outputdb));
-            // global_map     = merge_btree_maps(global_map, returned_blocks);
             loop {
                 match mpsc_receive.recv() {
                     Ok(msg) => {
-                        threcho(&format!("[MASTER] Got {:?}", msg));
+                        // threcho(&format!("[MASTER] Got {:?}", msg));
                         let (accounts_map, blockstats_map): (
                             BTreeMap<String, AccountProfile>,
                             HashMap<(String, u64), (u64, f64)>,
                         ) = msg;
+
+                        println!("Upserting {} accounts.", accounts_map.len());
                         for (address, profile) in accounts_map.iter() {
                             let _ = upsert_account(&dbconn, &address, &profile);
                         }
 
+                        println!("Upserting {} blocks.", blockstats_map.len());
                         for ((bhash, bheight), (txcount, ixpertx)) in blockstats_map.iter() {
                             let _ = insert_block_stat(&dbconn, bhash, bheight, txcount, ixpertx);
                         }
+
                     }
                     Err(e) => {
                         println!("{}", e);
@@ -236,6 +240,7 @@ pub fn spawn_consumer_thread_in_scope<'a>(
         let mut threadwide_blocks_stats: HashMap<(String, u64), (u64, f64)> = HashMap::new();
         let mut processed_blocks = 1;
 
+        
         loop {
             match consumer.poll(Duration::from_millis(500)) {
                 Some(m) => {
@@ -271,13 +276,14 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                 None => {}
             }
 
-            if processed_blocks % 10 == 0 {
+            if processed_blocks % BATCH_SIZE == 0 {
                 send_to_master
                     .send((threadwide_account_stats, threadwide_blocks_stats))
                     .unwrap();
                 println!(
-                    "[{:?}] Processed 10 blocks. Sending batch to master.",
-                    std::thread::current().id()
+                    "[{:?}] Processed {} blocks. Sending batch to master.",
+                    std::thread::current().id(),
+                    BATCH_SIZE
                 );
                 threadwide_account_stats = BTreeMap::new();
                 threadwide_blocks_stats = HashMap::new();
