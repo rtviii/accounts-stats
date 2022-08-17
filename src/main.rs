@@ -25,8 +25,7 @@ use std::{
     time::Duration,
 };
 
-const BATCH_SIZE:usize = 1000;
-
+const BATCH_SIZE:usize = 20;
 pub fn parse_tuple(tup: &str) -> Result<(u64, u64), std::string::ParseError> {
     let tup = tup.replace("(", "");
     let tup = tup.replace(")", "");
@@ -78,7 +77,7 @@ pub fn baseconsumer_init(
             .set("enable.partition.eof", "false")
             .set("session.timeout.ms", "60000")
             .set("enable.auto.commit", "true")
-            .set("fetch.wait.max.ms", "1000")
+            .set("fetch.wait.max.ms", "5000")
             // .set("batch.num.messages", "1")
             .set("group.id", consumer_group)
             .create()
@@ -105,8 +104,9 @@ fn main() {
 
     let (mpsc_sx, mpsc_rx) = mpsc::channel::<(
         BTreeMap<String, AccountProfile>,
-        HashMap<(String, u64), (u64, f64)>,
+        HashMap<(String, u64), u64>,
     )>();
+
     // -------------------------------------------------------------------------------
     // create n_threads equal chunks ranging from start_end[0] to start_end[1]
     let offsets = (startend.0..startend.1).collect::<Vec<u64>>();
@@ -114,6 +114,7 @@ fn main() {
     let consumer_group = &args
         .consumer_group
         .unwrap_or("default_consumer_group".to_string());
+    // -------------------------------------------------------------------------------
 
     let (mpsc_send, mpsc_receive) = mpsc::channel();
 
@@ -126,15 +127,15 @@ fn main() {
                     Ok(msg) => {
                         let (accounts_map, blockstats_map): (
                             BTreeMap<String, AccountProfile>,
-                            HashMap<(String, u64), (u64, f64)>,
+                            HashMap<(String, u64), u64>,
                         ) = msg;
 
                         for (address, profile) in accounts_map.iter() {
                             upsert_account(&dbconn, &address, &profile).unwrap();
                         }
 
-                        for ((bhash, bheight), (txcount, ixpertx)) in blockstats_map.iter() {
-                            insert_block_stat(&dbconn, bhash, bheight, txcount, ixpertx).unwrap();
+                        for ((bhash, bheight), txcount) in blockstats_map.iter() {
+                            insert_block_stat(&dbconn, bhash, bheight, txcount).unwrap();
                         }
                     }
                     Err(e) => {
@@ -227,17 +228,18 @@ pub fn block_extract_statistics(
 }
 
 pub fn spawn_consumer_thread_in_scope<'a>(
-    consumer: BaseConsumer,
-    halt_at_offset: u64,
+    consumer       : BaseConsumer,
+    halt_at_offset : u64,
     crossbeam_scope: &Scope<'a>,
     send_to_master: Sender<(
         BTreeMap<String, AccountProfile>,
-        HashMap<(String, u64), (u64, f64)>,
+        HashMap<(String, u64), u64>,
     )>,
 ) -> Result<(), KafkaError> {
     crossbeam_scope.spawn(move |_| -> Result<(), BlockProcessingError> {
+        println!("Spawned consumer with halt_at_offset {:?}" , halt_at_offset);
         let mut threadwide_account_stats: BTreeMap<String, AccountProfile> = BTreeMap::new();
-        let mut threadwide_blocks_stats: HashMap<(String, u64), (u64, f64)> = HashMap::new();
+        let mut threadwide_blocks_stats: HashMap<(String, u64), u64> = HashMap::new();
         let mut processed_blocks = 1;
 
         
@@ -254,7 +256,7 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                                 merge_btree_maps(threadwide_account_stats, accounts_stats);
                             threadwide_blocks_stats.insert(
                                 (block_stats_row.blockhash, block_stats_row.blockheight),
-                                (block_stats_row.txnum, block_stats_row.ixpertx),
+                                block_stats_row.txnum,
                             );
                             processed_blocks += 1;
                             println!(
