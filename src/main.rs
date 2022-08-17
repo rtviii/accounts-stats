@@ -16,6 +16,7 @@ use sb3_sqlite::{
     block_ops, create_statistics_tables, insert_block_stat, merge_btree_maps, merge_hmaps,
     process_tx, upsert_account, AccountProfile,
 };
+
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::process::exit;
@@ -75,9 +76,12 @@ pub fn baseconsumer_init(
         let c: BaseConsumer = ClientConfig::new()
             .set("bootstrap.servers", format!("127.0.0.1:{}", port))
             .set("enable.partition.eof", "false")
+            .set("socket.send.buffer.bytes", "5048576")
+            .set("socket.receive.buffer.bytes", "5048576")
+            .set("queued.max.messages.kbytes", "2096151")
             .set("session.timeout.ms", "60000")
             .set("enable.auto.commit", "true")
-            .set("fetch.wait.max.ms", "5000")
+            .set("fetch.wait.max.ms", "10000")
             // .set("batch.num.messages", "1")
             .set("group.id", consumer_group)
             .create()
@@ -115,7 +119,6 @@ fn main() {
         .consumer_group
         .unwrap_or("default_consumer_group".to_string());
     // -------------------------------------------------------------------------------
-
     let (mpsc_send, mpsc_receive) = mpsc::channel();
 
     let _ = thread::scope(|s| -> Result<(), KafkaError> {
@@ -148,6 +151,7 @@ fn main() {
 
         for chunk in chunks {
             let bconsumer = baseconsumer_init(*port, consumer_group, chunk, &topic_name)?;
+            println!("Watermarks : {:?}", bconsumer.fetch_watermarks(&topic_name, 0, Duration::from_secs(10))?);
             let _ = spawn_consumer_thread_in_scope(
                 bconsumer,
                 chunk[chunk.len() - 1],
@@ -237,19 +241,26 @@ pub fn spawn_consumer_thread_in_scope<'a>(
     )>,
 ) -> Result<(), KafkaError> {
     crossbeam_scope.spawn(move |_| -> Result<(), BlockProcessingError> {
+
         println!("Spawned consumer with halt_at_offset {:?}" , halt_at_offset);
-        let mut threadwide_account_stats: BTreeMap<String, AccountProfile> = BTreeMap::new();
-        let mut threadwide_blocks_stats: HashMap<(String, u64), u64> = HashMap::new();
-        let mut processed_blocks = 1;
+
+        let mut threadwide_account_stats: BTreeMap<String,      AccountProfile> = BTreeMap::new();
+        let mut threadwide_blocks_stats: HashMap<(String, u64), u64>            = HashMap::new();
+        let mut processed_blocks                               = 1;
 
         
         loop {
-            match consumer.poll(Duration::from_millis(500)) {
+            threcho("Polling.");
+            match consumer.poll(Duration::from_millis(10000)) {
+                
                 Some(m) => {
+                    println!("Got Some");
                     let message = match m {
                         Ok(bm) => {
+
                             let parsedval: Value =
                                 serde_json::from_slice::<Value>(&bm.payload().unwrap()).unwrap();
+                                println!("Got block {:?}", parsedval);
                             let (accounts_stats, block_stats_row) =
                                 block_extract_statistics(parsedval)?;
                             threadwide_account_stats =
@@ -267,6 +278,7 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                             bm
                         }
                         Err(e) => {
+                            
                             panic!("Message receive error! {}", e);
                         }
                     };
@@ -275,7 +287,9 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                         break;
                     }
                 }
-                None => {}
+                None => {
+                    println!(".");
+                }
             }
 
             if processed_blocks % BATCH_SIZE == 0 {
