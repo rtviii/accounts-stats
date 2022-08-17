@@ -170,7 +170,17 @@ pub enum BlockProcessingError {
     OtherError(),
 }
 
-fn count_tx__ix_per_tx(transactions: &Vec<Value>) -> (usize, f64) {
+// fn count_tx__ix_per_tx(transactions: &Vec<Value>) -> (usize, f64) {
+//     let (txnum, mut ix_num) = (transactions.len(), 0);
+//     for tx in transactions.iter() {
+//         let tx_ixs = tx["transaction"]["message"]["instructions"]
+//             .as_array()
+//             .unwrap();
+//         ix_num += tx_ixs.len() as usize;
+//     }
+//     (txnum, ix_num as f64 / txnum as f64)
+// }
+fn count_tx(transactions: &Vec<Value>) -> (usize, f64) {
     let (txnum, mut ix_num) = (transactions.len(), 0);
     for tx in transactions.iter() {
         let tx_ixs = tx["transaction"]["message"]["instructions"]
@@ -186,7 +196,6 @@ pub struct BlockStatsRow {
     blockhash: String,
     blockheight: u64,
     txnum: u64,
-    ixpertx: f64,
 }
 pub fn block_extract_statistics(
     block: Value,
@@ -202,7 +211,7 @@ pub fn block_extract_statistics(
         .as_str()
         .expect("Didn't find blockhhash")
         .to_string();
-    let (tx, ixpertx) = count_tx__ix_per_tx(transactions);
+    let tx = transactions.len();
 
     for tx in transactions.iter() {
         let _ = process_tx(&tx["transaction"], &mut block_map);
@@ -213,7 +222,6 @@ pub fn block_extract_statistics(
             blockhash,
             blockheight: blockheight,
             txnum: tx as u64,
-            ixpertx: ixpertx,
         },
     ))
 }
