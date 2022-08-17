@@ -247,22 +247,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
-name = "channeling"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "crossbeam",
- "crossbeam-utils",
- "log",
- "rand 0.8.5",
- "rdkafka",
- "sb3-sqlite",
- "serde_json",
- "timer",
-]
-
-[[package]]
 name = "chrono"
 version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -954,6 +938,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "mpsc_stats"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "crossbeam",
+ "crossbeam-utils",
+ "log",
+ "rand 0.8.5",
+ "rdkafka",
+ "sb3-sqlite",
+ "serde_json",
+ "timer",
 ]
 
 [[package]]
