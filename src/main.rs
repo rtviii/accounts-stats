@@ -91,7 +91,8 @@ pub fn baseconsumer_init(
 
     let mut tpl = TopicPartitionList::new();
     tpl.add_partition_offset(topic, 0, rdkafka::Offset::Offset(offset_range[0] as i64))?;
-    bconsumer.assign(&tpl)?;
+    // bconsumer.assign(&tpl)?;
+    // println!("Assignment  : {:?}", bconsumer.assignment());
     Ok(bconsumer)
 }
 
@@ -251,7 +252,7 @@ pub fn spawn_consumer_thread_in_scope<'a>(
         
         loop {
             threcho("Polling.");
-            match consumer.poll(Duration::from_millis(10000)) {
+            match consumer.poll(Duration::from_millis(2000)) {
                 
                 Some(m) => {
                     println!("Got Some");
