@@ -89,6 +89,7 @@ pub fn baseconsumer_init(
     let mut tpl = TopicPartitionList::new();
     tpl.add_partition_offset(topic, 0, rdkafka::Offset::Offset(offset_range[0] as i64))?;
     bconsumer.assign(&tpl)?;
+    println!("Got watermarks:{:?} ", bconsumer.fetch_watermarks(topic, 0, Duration::from_secs(3)));
     Ok(bconsumer)
 }
 
@@ -134,7 +135,7 @@ fn main() {
                         }
 
                         for ((bhash, bheight), (txcount, ixpertx)) in blockstats_map.iter() {
-                            insert_block_stat(&dbconn, bhash, bheight, txcount, ixpertx).unwrap();
+                            insert_block_stat(&dbconn, bhash, bheight, txcount).unwrap();
                         }
                     }
                     Err(e) => {
@@ -197,7 +198,7 @@ pub fn block_extract_statistics(
         .expect("Didn't find transactions");
     let blockheight = block["blockHeight"]
         .as_u64()
-        .expect("Didn't find blockheight");
+        .unwrap_or(0);
     let blockhash = (block["blockhash"])
         .as_str()
         .expect("Didn't find blockhhash")
@@ -238,12 +239,18 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                 Some(m) => {
                     let message = match m {
                         Ok(bm) => {
+
+                            println!("Got offset {}", bm.offset());
+
                             let parsedval: Value =
                                 serde_json::from_slice::<Value>(&bm.payload().unwrap()).unwrap();
+
                             let (accounts_stats, block_stats_row) =
                                 block_extract_statistics(parsedval)?;
+
                             threadwide_account_stats =
                                 merge_btree_maps(threadwide_account_stats, accounts_stats);
+
                             threadwide_blocks_stats.insert(
                                 (block_stats_row.blockhash, block_stats_row.blockheight),
                                 (block_stats_row.txnum, block_stats_row.ixpertx),
@@ -257,15 +264,19 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                             bm
                         }
                         Err(e) => {
+                            println!("error :{}", e);
                             panic!("Message receive error! {}", e);
                         }
                     };
+
                     if message.offset() == halt_at_offset as i64 {
                         println!("Consumer reached halt offset {}", halt_at_offset);
                         break;
                     }
                 }
-                None => {}
+                None => {
+                    println!("No message received");
+                }
             }
 
             if processed_blocks % BATCH_SIZE == 0 {

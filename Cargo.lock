@@ -247,22 +247,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
-name = "channeling"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "crossbeam",
- "crossbeam-utils",
- "log",
- "rand 0.8.5",
- "rdkafka",
- "sb3-sqlite",
- "serde_json",
- "timer",
-]
-
-[[package]]
 name = "chrono"
 version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1386,6 +1370,22 @@ dependencies = [
  "serde",
  "serde_json",
  "solana-sdk",
+]
+
+[[package]]
+name = "sbt-stats"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "crossbeam",
+ "crossbeam-utils",
+ "log",
+ "rand 0.8.5",
+ "rdkafka",
+ "sb3-sqlite",
+ "serde_json",
+ "timer",
 ]
 
 [[package]]
