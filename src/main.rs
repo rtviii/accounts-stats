@@ -1,5 +1,6 @@
 #![allow(unused_variables)]
 #![allow(unused_imports)]
+#![allow(non_snake_case)]
 use clap::Parser;
 use crossbeam::thread::{self, Scope};
 use log::{info, warn};
@@ -164,6 +165,7 @@ fn main() {
 pub fn threcho(msg: &str) {
     println!("[{:?}]: {}", std::thread::current().id(), msg);
 }
+
 pub enum BlockProcessingError {
     KafkaError(),
     SerdeError(),
@@ -213,8 +215,8 @@ pub fn block_extract_statistics(
         BlockStatsRow {
             blockhash,
             blockheight: blockheight,
-            txnum: tx as u64,
-            ixpertx: ixpertx,
+            txnum      : tx as u64,
+            ixpertx    : ixpertx,
         },
     ))
 }
@@ -255,6 +257,7 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                                 (block_stats_row.blockhash, block_stats_row.blockheight),
                                 (block_stats_row.txnum, block_stats_row.ixpertx),
                             );
+
                             processed_blocks += 1;
                             println!(
                                 "[{:?}] Processed blocks {}",
