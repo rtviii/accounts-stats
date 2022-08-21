@@ -17,6 +17,7 @@ use sb3_sqlite::{
     block_ops, create_statistics_tables, insert_block_stat, merge_btree_maps, merge_hmaps,
     process_tx, upsert_account, AccountProfile,
 };
+
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::process::exit;
@@ -26,8 +27,7 @@ use std::{
     time::Duration,
 };
 
-const BATCH_SIZE:usize = 1000;
-
+const BATCH_SIZE:usize = 20;
 pub fn parse_tuple(tup: &str) -> Result<(u64, u64), std::string::ParseError> {
     let tup = tup.replace("(", "");
     let tup = tup.replace(")", "");
@@ -77,9 +77,12 @@ pub fn baseconsumer_init(
         let c: BaseConsumer = ClientConfig::new()
             .set("bootstrap.servers", format!("127.0.0.1:{}", port))
             .set("enable.partition.eof", "false")
+            .set("socket.send.buffer.bytes", "5048576")
+            .set("socket.receive.buffer.bytes", "5048576")
+            .set("queued.max.messages.kbytes", "2096151")
             .set("session.timeout.ms", "60000")
             .set("enable.auto.commit", "true")
-            .set("fetch.wait.max.ms", "1000")
+            .set("fetch.wait.max.ms", "10000")
             // .set("batch.num.messages", "1")
             .set("group.id", consumer_group)
             .create()
@@ -107,8 +110,9 @@ fn main() {
 
     let (mpsc_sx, mpsc_rx) = mpsc::channel::<(
         BTreeMap<String, AccountProfile>,
-        HashMap<(String, u64), (u64, f64)>,
+        HashMap<(String, u64), u64>,
     )>();
+
     // -------------------------------------------------------------------------------
     // create n_threads equal chunks ranging from start_end[0] to start_end[1]
     let offsets = (startend.0..startend.1).collect::<Vec<u64>>();
@@ -116,7 +120,7 @@ fn main() {
     let consumer_group = &args
         .consumer_group
         .unwrap_or("default_consumer_group".to_string());
-
+    // -------------------------------------------------------------------------------
     let (mpsc_send, mpsc_receive) = mpsc::channel();
 
     let _ = thread::scope(|s| -> Result<(), KafkaError> {
@@ -128,14 +132,14 @@ fn main() {
                     Ok(msg) => {
                         let (accounts_map, blockstats_map): (
                             BTreeMap<String, AccountProfile>,
-                            HashMap<(String, u64), (u64, f64)>,
+                            HashMap<(String, u64), u64>,
                         ) = msg;
 
                         for (address, profile) in accounts_map.iter() {
                             upsert_account(&dbconn, &address, &profile).unwrap();
                         }
 
-                        for ((bhash, bheight), (txcount, ixpertx)) in blockstats_map.iter() {
+                        for ((bhash, bheight), txcount) in blockstats_map.iter() {
                             insert_block_stat(&dbconn, bhash, bheight, txcount).unwrap();
                         }
                     }
@@ -149,6 +153,7 @@ fn main() {
 
         for chunk in chunks {
             let bconsumer = baseconsumer_init(*port, consumer_group, chunk, &topic_name)?;
+            println!("Watermarks : {:?}", bconsumer.fetch_watermarks(&topic_name, 0, Duration::from_secs(10))?);
             let _ = spawn_consumer_thread_in_scope(
                 bconsumer,
                 chunk[chunk.len() - 1],
@@ -173,7 +178,17 @@ pub enum BlockProcessingError {
     OtherError(),
 }
 
-fn count_tx__ix_per_tx(transactions: &Vec<Value>) -> (usize, f64) {
+// fn count_tx__ix_per_tx(transactions: &Vec<Value>) -> (usize, f64) {
+//     let (txnum, mut ix_num) = (transactions.len(), 0);
+//     for tx in transactions.iter() {
+//         let tx_ixs = tx["transaction"]["message"]["instructions"]
+//             .as_array()
+//             .unwrap();
+//         ix_num += tx_ixs.len() as usize;
+//     }
+//     (txnum, ix_num as f64 / txnum as f64)
+// }
+fn count_tx(transactions: &Vec<Value>) -> (usize, f64) {
     let (txnum, mut ix_num) = (transactions.len(), 0);
     for tx in transactions.iter() {
         let tx_ixs = tx["transaction"]["message"]["instructions"]
@@ -189,7 +204,6 @@ pub struct BlockStatsRow {
     blockhash: String,
     blockheight: u64,
     txnum: u64,
-    ixpertx: f64,
 }
 pub fn block_extract_statistics(
     block: Value,
@@ -205,7 +219,7 @@ pub fn block_extract_statistics(
         .as_str()
         .expect("Didn't find blockhhash")
         .to_string();
-    let (tx, ixpertx) = count_tx__ix_per_tx(transactions);
+    let tx = transactions.len();
 
     for tx in transactions.iter() {
         let _ = process_tx(&tx["transaction"], &mut block_map);
@@ -215,30 +229,35 @@ pub fn block_extract_statistics(
         BlockStatsRow {
             blockhash,
             blockheight: blockheight,
-            txnum      : tx as u64,
-            ixpertx    : ixpertx,
+            txnum: tx as u64,
         },
     ))
 }
 
 pub fn spawn_consumer_thread_in_scope<'a>(
-    consumer: BaseConsumer,
-    halt_at_offset: u64,
+    consumer       : BaseConsumer,
+    halt_at_offset : u64,
     crossbeam_scope: &Scope<'a>,
     send_to_master: Sender<(
         BTreeMap<String, AccountProfile>,
-        HashMap<(String, u64), (u64, f64)>,
+        HashMap<(String, u64), u64>,
     )>,
 ) -> Result<(), KafkaError> {
     crossbeam_scope.spawn(move |_| -> Result<(), BlockProcessingError> {
-        let mut threadwide_account_stats: BTreeMap<String, AccountProfile> = BTreeMap::new();
-        let mut threadwide_blocks_stats: HashMap<(String, u64), (u64, f64)> = HashMap::new();
-        let mut processed_blocks = 1;
+
+        println!("Spawned consumer with halt_at_offset {:?}" , halt_at_offset);
+
+        let mut threadwide_account_stats: BTreeMap<String,      AccountProfile> = BTreeMap::new();
+        let mut threadwide_blocks_stats: HashMap<(String, u64), u64>            = HashMap::new();
+        let mut processed_blocks                               = 1;
 
         
         loop {
-            match consumer.poll(Duration::from_millis(500)) {
+            threcho("Polling.");
+            match consumer.poll(Duration::from_millis(2000)) {
+                
                 Some(m) => {
+                    println!("Got Some");
                     let message = match m {
                         Ok(bm) => {
 
@@ -246,7 +265,6 @@ pub fn spawn_consumer_thread_in_scope<'a>(
 
                             let parsedval: Value =
                                 serde_json::from_slice::<Value>(&bm.payload().unwrap()).unwrap();
-
                             let (accounts_stats, block_stats_row) =
                                 block_extract_statistics(parsedval)?;
 
@@ -255,7 +273,7 @@ pub fn spawn_consumer_thread_in_scope<'a>(
 
                             threadwide_blocks_stats.insert(
                                 (block_stats_row.blockhash, block_stats_row.blockheight),
-                                (block_stats_row.txnum, block_stats_row.ixpertx),
+                                block_stats_row.txnum,
                             );
 
                             processed_blocks += 1;
@@ -267,7 +285,6 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                             bm
                         }
                         Err(e) => {
-                            println!("error :{}", e);
                             panic!("Message receive error! {}", e);
                         }
                     };
