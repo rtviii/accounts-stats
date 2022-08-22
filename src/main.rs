@@ -1,6 +1,7 @@
 #![allow(unused_variables)]
 #![allow(unused_imports)]
 #![allow(non_snake_case)]
+use chrono::DateTime;
 use clap::Parser;
 use crossbeam::thread::{self, Scope};
 use log::{info, warn};
@@ -18,8 +19,12 @@ use sb3_sqlite::{
     process_tx, upsert_account, AccountProfile,
 };
 
+
+
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::process::exit;
 
 use std::{
@@ -42,11 +47,16 @@ pub fn parse_tuple(tup: &str) -> Result<(u64, u64), std::string::ParseError> {
 #[derive(Debug, Parser)]
 #[clap(author, version, long_about=None)]
 pub struct Args {
+
+
     #[clap(takes_value = false, long)]
     producer: bool,
 
     #[clap(takes_value = false, long)]
     consumer: bool,
+
+    #[clap(long)]
+    logfile: Option<String>,
 
     #[clap(short = 'g', long)]
     consumer_group: Option<String>,
@@ -97,75 +107,8 @@ pub fn baseconsumer_init(
     Ok(bconsumer)
 }
 
-fn main() {
-    let args       = Args::parse();
-    let flag_cons  = args.consumer;
-    let flag_prod  = args.producer;
-    let port       = &args.broker_port;
-    let topic_name = &args.topic_name;
-    let nthreads   = args.n_threads;
-    let outputdb   = args.output_db;
-    let startend   = args.start_end;
-    let timer      = timer::Timer::new();
 
-    let (mpsc_sx, mpsc_rx) = mpsc::channel::<(
-        BTreeMap<String, AccountProfile>,
-        HashMap<(String, u64), u64>,
-    )>();
 
-    // -------------------------------------------------------------------------------
-    // create n_threads equal chunks ranging from start_end[0] to start_end[1]
-    let offsets = (startend.0..startend.1).collect::<Vec<u64>>();
-    let chunks = offsets.chunks(offsets.len() / nthreads as usize);
-    let consumer_group = &args
-        .consumer_group
-        .unwrap_or("default_consumer_group".to_string());
-    // -------------------------------------------------------------------------------
-    let (mpsc_send, mpsc_receive) = mpsc::channel();
-
-    let _ = thread::scope(|s| -> Result<(), KafkaError> {
-        s.spawn(move |_| {
-            let dbconn = create_statistics_tables(&outputdb)
-                .expect(&format!("Could not created sqlite file {}.", &outputdb));
-            loop {
-                match mpsc_receive.recv() {
-                    Ok(msg) => {
-                        let (accounts_map, blockstats_map): (
-                            BTreeMap<String, AccountProfile>,
-                            HashMap<(String, u64), u64>,
-                        ) = msg;
-
-                        for (address, profile) in accounts_map.iter() {
-                            upsert_account(&dbconn, &address, &profile).unwrap();
-                        }
-
-                        for ((bhash, bheight), txcount) in blockstats_map.iter() {
-                            insert_block_stat(&dbconn, bhash, bheight, txcount).unwrap();
-                        }
-                    }
-                    Err(e) => {
-                        println!("{}", e);
-                        std::thread::sleep(Duration::from_secs(2));
-                    }
-                }
-            }
-        });
-
-        for chunk in chunks {
-            let bconsumer = baseconsumer_init(*port, consumer_group, chunk, &topic_name)?;
-            println!("Received  [{}] watermarks for topic : {:?}", &topic_name, bconsumer.fetch_watermarks(&topic_name, 0, Duration::from_secs(10))?);
-            let _ = spawn_consumer_thread_in_scope(
-                bconsumer,
-                chunk[chunk.len() - 1],
-                s,
-                mpsc_send.clone(),
-            );
-        }
-        Ok(())
-    })
-    .unwrap();
-
-}
 
 pub fn threcho(msg: &str) {
     println!("[{:?}]: {}", std::thread::current().id(), msg);
@@ -261,9 +204,6 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                 Some(m) => {
                     let message = match m {
                         Ok(bm) => {
-
-
-
                             let parsedval: Value                  = serde_json::from_slice::<Value>(&bm.payload().unwrap()).unwrap();
                             let (accounts_stats, block_stats_row) = block_extract_statistics(parsedval)?;
                                 threadwide_account_stats          = merge_btree_maps(threadwide_account_stats, accounts_stats);
@@ -314,4 +254,93 @@ pub fn spawn_consumer_thread_in_scope<'a>(
         Ok(())
     });
     Ok(())
+}
+
+
+
+pub struct Logfile{
+    pub filepath: String
+}
+
+pub fn get_logfile(name:&str)->File{
+    OpenOptions::new().write(true).append(true).create(true).open(name).unwrap()
+}
+
+fn main() {
+    let args         = Args::parse();
+    let flag_cons    = args.consumer;
+    let flag_prod    = args.producer;
+    let port         = &args.broker_port;
+    let topic_name   = &args.topic_name;
+    let nthreads     = args.n_threads;
+    let outputdb     = args.output_db;
+    let logfile_path = args.logfile.unwrap_or(format!("{}.log", chrono::offset::Local::now().format("%s")));
+    let startend     = args.start_end;
+    let timer        = timer::Timer::new();
+
+
+    let mut logfile = get_logfile(&logfile_path);
+    let (mpsc_sx, mpsc_rx) = mpsc::channel::<(
+        BTreeMap<String, AccountProfile>,
+        HashMap<(String, u64), u64>,
+    )>();
+
+    // -------------------------------------------------------------------------------
+    // create n_threads equal chunks ranging from start_end[0] to start_end[1]
+    let offsets = (startend.0..startend.1).collect::<Vec<u64>>();
+    let chunks = offsets.chunks(offsets.len() / nthreads as usize);
+    let consumer_group = &args
+        .consumer_group
+        .unwrap_or("default_consumer_group".to_string());
+    // -------------------------------------------------------------------------------
+    let (mpsc_send, mpsc_receive) = mpsc::channel();
+
+    let _ = thread::scope(|s| -> Result<(), KafkaError> {
+
+        s.spawn(move |_| {
+            let dbconn = create_statistics_tables(&outputdb)
+                .expect(&format!("Could not created sqlite file {}.", &outputdb));
+            loop {
+                match mpsc_receive.recv() {
+                    Ok(msg) => {
+                        let (accounts_map, blockstats_map): (
+                            BTreeMap<String, AccountProfile>,
+                            HashMap<(String, u64), u64>,
+                        ) = msg;
+
+                        for (address, profile) in accounts_map.iter() {
+                            match upsert_account(&dbconn, &address, &profile){
+                                Ok(())=>{},
+                                Err(e)=>{
+                                    writeln!(logfile)
+                                }
+                            }
+                        }
+
+                        for ((bhash, bheight), txcount) in blockstats_map.iter() {
+                            insert_block_stat(&dbconn, bhash, bheight, txcount).unwrap();
+                        }
+                    }
+                    Err(e) => {
+                        println!("{}", e);
+                        std::thread::sleep(Duration::from_secs(2));
+                    }
+                }
+            }
+        });
+
+        for chunk in chunks {
+            let bconsumer = baseconsumer_init(*port, consumer_group, chunk, &topic_name)?;
+            println!("Received  [{}] watermarks for topic : {:?}", &topic_name, bconsumer.fetch_watermarks(&topic_name, 0, Duration::from_secs(10))?);
+            let _ = spawn_consumer_thread_in_scope(
+                bconsumer,
+                chunk[chunk.len() - 1],
+                s,
+                mpsc_send.clone(),
+            );
+        }
+        Ok(())
+    })
+    .unwrap();
+
 }
