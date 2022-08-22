@@ -180,11 +180,13 @@ pub fn spawn_consumer_thread_in_scope<'a>(
         BTreeMap<String, AccountProfile>,
         HashMap<(String, u64), u64>,
     )>,
+    logfile_path: String
 ) -> Result<(), KafkaError> {
     crossbeam_scope.spawn(move |_| -> Result<(), BlockProcessingError> {
         println!("Spawned consumer with halt_at_offset {:?}", halt_at_offset);
         let mut first_processed_offset = -1;
         let mut last_processed_offset  = -1;
+        let mut loghandle =  get_logfile(&logfile_path);
 
         let mut threadwide_account_stats: BTreeMap<String, AccountProfile> = BTreeMap::new();
         let mut threadwide_blocks_stats: HashMap<(String, u64), u64> = HashMap::new();
@@ -197,13 +199,17 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                     let message = match m {
                         Ok(bm) => {
                             let parsedval: Value =
-                                serde_json::from_slice::<Value>(&bm.payload().unwrap()).unwrap();
+                                serde_json::from_slice::<Value>(&bm.payload().unwrap_or_else(||{
 
-                            let (accounts_stats, block_stats_row) =
-                                block_extract_statistics(parsedval)?;
+                                    // let l = get_logfile(logfile_path);
+                                    &[]
+                                })).unwrap_or_else(|_|{
+                                    do_log(&mut loghandle, &format!("Failed to parse block with offset {}", bm.offset()));
+                                    Value::Null
+                                });
 
-                            threadwide_account_stats =
-                                merge_btree_maps(threadwide_account_stats, accounts_stats);
+                            let (accounts_stats, block_stats_row) = block_extract_statistics(parsedval)?;
+                                threadwide_account_stats          = merge_btree_maps(threadwide_account_stats, accounts_stats);
 
                             threadwide_blocks_stats.insert(
                                 (block_stats_row.blockhash, block_stats_row.blockheight),
@@ -269,6 +275,10 @@ pub fn get_logfile(name: &str) -> File {
         .open(name)
         .unwrap()
 }
+pub fn do_log(logfile: &mut File, msg: &str) {
+    writeln!(logfile, "[{}] {}",
+    chrono::Utc::now(),msg);
+}
 
 fn main() {
     let args         = Args::parse();
@@ -284,7 +294,7 @@ fn main() {
     let startend = args.start_end;
     let timer = timer::Timer::new();
 
-    let mut logfile = get_logfile(&logfile_path);
+    let mut logfile_main = get_logfile(&logfile_path);
 
     let (mpsc_sx, mpsc_rx) = mpsc::channel::<(
         BTreeMap<String, AccountProfile>,
@@ -293,79 +303,72 @@ fn main() {
 
     // -------------------------------------------------------------------------------
     // create n_threads equal chunks ranging from start_end[0] to start_end[1]
-    let offsets = (startend.0..startend.1+1).collect::<Vec<u64>>();
-    let chunks  = offsets.chunks(offsets.len()/nthreads as usize );
-    let mut split   = chunks.map(|c|{ c.to_vec().to_owned() }).collect::<Vec<_>>();
-
+    let offsets   = (startend.0..startend.1+1).collect::<Vec<u64>>();
+    let chunks    = offsets.chunks(offsets.len()/nthreads as usize );
+    let mut split = chunks.map(|c|{ c.to_vec().to_owned() }).collect::<Vec<_>>();
     if split[split.len()-2].len() != split[split.len()-1].len(){
         let last    = split.pop().unwrap();
         let prelast = split.pop().unwrap();
-        let mut merged = [
-            last.as_slice()  ,
-            prelast.as_slice()].concat();
+        let mut merged = [last.as_slice(),prelast.as_slice()].concat();
         merged.sort();
         split.push(merged);
     }
-    println!("{:?}", split);
 
-
-    // let mut chunks_h:Vec<&[u64]> = offsets.chunks(offsets.len() / nthreads as usize).collect();
-    // chunks_h[0] =  &[ chunks_h.get(0).unwrap().to_owned(), chunks_h.get(2).unwrap().to_owned()];
-    // println!("{:?}", chunks_h);
-    // let chunks = offsets.chunks(offsets.len() / nthreads as usize);
 
     let consumer_group = &args
         .consumer_group
         .unwrap_or("default_consumer_group".to_string());
     // -------------------------------------------------------------------------------
-    // let (mpsc_send, mpsc_receive) = mpsc::channel();
+    let (mpsc_send, mpsc_receive) = mpsc::channel();
 
-    // let _ = thread::scope(|scope| -> Result<(), KafkaError> {
-    //     scope.spawn(move |_| {
-    //         let dbconn = create_statistics_tables(&outputdb)
-    //             .expect(&format!("Could not created sqlite file {}.", &outputdb));
-    //         loop {
-    //             match mpsc_receive.recv() {
-    //                 Ok(msg) => {
-    //                     let (accounts_map, blockstats_map): (
-    //                         BTreeMap<String, AccountProfile>,
-    //                         HashMap<(String, u64), u64>,
-    //                     ) = msg;
+    let _ = thread::scope(|scope| -> Result<(), KafkaError> {
+        scope.spawn(move |_| {
+            let dbconn = create_statistics_tables(&outputdb)
+                .expect(&format!("Could not created sqlite file {}.", &outputdb));
+            loop {
+                match mpsc_receive.recv() {
+                    Ok(msg) => {
+                        let (accounts_map, blockstats_map): (
+                            BTreeMap<String, AccountProfile>,
+                            HashMap<(String, u64), u64>,
+                        ) = msg;
 
-    //                     for (address, profile) in accounts_map.iter() {
-    //                         upsert_account(&dbconn, &address, &profile).map_err(|e|{
-    //                                 writeln!(logfile, "[{}] Error upserting account {} with account profile {:?}:\n{}",
-    //                                  chrono::Utc::now(),&address, &profile, e.to_string());
-    //                         });
-    //                     }
+                        for (address, profile) in accounts_map.iter() {
+                            upsert_account(&dbconn, &address, &profile).map_err(|e|{
+                                do_log(&mut logfile_main,
+                                     &format!("Error upserting account {} with account profile {:?}:\n{}", &address, &profile, e.to_string()))
+                            });
+                        }
 
-    //                     for ((bhash, bheight), txcount) in blockstats_map.iter() {
-    //                         insert_block_stat(&dbconn, bhash, bheight, txcount).map_err(|e|{
-    //                                 writeln!(logfile, "[{}] Error inserting block {}/{} into db: \n{}",
-    //                                  chrono::Utc::now(), &bhash,&bheight, e.to_string());
-    //                         });
-    //                     }
-    //                 }
-    //                 Err(e) => {
-    //                     println!("{}", e);
-    //                     std::thread::sleep(Duration::from_secs(2));
-    //                 }
-    //             }
-    //         }
-    //     });
+                        for ((bhash, bheight), txcount) in blockstats_map.iter() {
+                            insert_block_stat(&dbconn, bhash, bheight, txcount).map_err(|e|{
+                            do_log(&mut logfile_main,&format!("Error inserting block {}/{} into db: \n{}",&bhash,&bheight, e.to_string()));
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        do_log(&mut logfile_main,&format!("Kafka error on receive {:?}", e.to_string()));
+                    }
+                }
+            }
+        });
 
-    //     for chunk in chunks {
-    //         let bconsumer = baseconsumer_init(*port, consumer_group, chunk, &topic_name)?;
-    //         println!("Received  [{}] watermarks for topic : {:?}", &topic_name, bconsumer.fetch_watermarks(&topic_name, 0, Duration::from_secs(10))?);
-
-    //         let _ = spawn_consumer_thread_in_scope(
-    //             bconsumer,
-    //             chunk[chunk.len()-1],
-    //             scope,
-    //             mpsc_send.clone(),
-    //         );
-    //     }
-    //     Ok(())
-    // })
-    // .unwrap();
+        for chunk in split.iter() {
+            let bconsumer = baseconsumer_init(*port, consumer_group, chunk, &topic_name)?;
+            println!("Received  [{}] watermarks for topic : {:?}", &topic_name, bconsumer.fetch_watermarks(&topic_name, 0, Duration::from_secs(10))?);
+            let _ = spawn_consumer_thread_in_scope(
+                bconsumer,
+                chunk[chunk.len()-1],
+                scope,
+                mpsc_send.clone(),
+                logfile_path.to_string(),
+            );
+        }
+        Ok(())
+    }).unwrap();
+    
+    // .map_err(|e|{
+    //     do_log(&mut logfile_main,&format!("Error in consumer threads"));
+    // });
+    
 }

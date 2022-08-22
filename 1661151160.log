@@ -1,8 +1,0 @@
-[2022-08-22 06:52:57.629977095 UTC] Error inserting block 9BrMn3aSRUukwtcU1mL4nZScqUomUScQRLAE6ZcXqzLV/121654455 into db: 
-UNIQUE constraint failed: block_stats.blockhash
-[2022-08-22 06:52:57.630100161 UTC] Error inserting block AmpgsXjqnjNUkiPBEQsy36xFBa7v5cEg94jg5dvPU5Mc/121654462 into db: 
-UNIQUE constraint failed: block_stats.blockhash
-[2022-08-22 06:53:07.121365746 UTC] Error inserting block 3fGB9qxr5c6fTqKXMgjHyDRVF2YbkFq4NZuQZy8rwphA/121654463 into db: 
-UNIQUE constraint failed: block_stats.blockhash
-[2022-08-22 06:53:07.121442847 UTC] Error inserting block 8ZjeY7QJMTLzqidBfGCQWAR9QR5Fe1BMV7vgfur5scfv/121654464 into db: 
-UNIQUE constraint failed: block_stats.blockhash
