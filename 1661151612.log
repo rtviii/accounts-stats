@@ -1,0 +1,16 @@
+[2022-08-22 07:00:42.595261640 UTC] Error inserting block 9BrMn3aSRUukwtcU1mL4nZScqUomUScQRLAE6ZcXqzLV/121654455 into db: 
+UNIQUE constraint failed: block_stats.blockhash
+[2022-08-22 07:00:42.595365189 UTC] Error inserting block AmpgsXjqnjNUkiPBEQsy36xFBa7v5cEg94jg5dvPU5Mc/121654462 into db: 
+UNIQUE constraint failed: block_stats.blockhash
+[2022-08-22 07:01:04.909871531 UTC] Error inserting block 8ZjeY7QJMTLzqidBfGCQWAR9QR5Fe1BMV7vgfur5scfv/121654464 into db: 
+UNIQUE constraint failed: block_stats.blockhash
+[2022-08-22 07:01:04.909945097 UTC] Error inserting block 3fGB9qxr5c6fTqKXMgjHyDRVF2YbkFq4NZuQZy8rwphA/121654463 into db: 
+UNIQUE constraint failed: block_stats.blockhash
+[2022-08-22 07:01:38.895469706 UTC] Error inserting block 3XD5R8pgtJdv7Qu2EPaH3mDddtB5HzPWBKsBbvKyNeWt/121654466 into db: 
+UNIQUE constraint failed: block_stats.blockhash
+[2022-08-22 07:01:38.895619360 UTC] Error inserting block FkQ87BL5n44Pb7MfNh5fZUvP96t6vJgQqcjw2bQKhPX3/121654467 into db: 
+UNIQUE constraint failed: block_stats.blockhash
+[2022-08-22 07:02:20.409229485 UTC] Error inserting block 6tL9NwByz5JinHxw5ku27Hs6X3AexLBv7rbJcKX6kGZC/121654468 into db: 
+UNIQUE constraint failed: block_stats.blockhash
+[2022-08-22 07:02:20.409615077 UTC] Error inserting block G6XCapJAbDo9rHcpNzVJ2ASnBhncTVHTrwyKakjCGpLZ/121654469 into db: 
+UNIQUE constraint failed: block_stats.blockhash

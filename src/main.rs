@@ -19,20 +19,19 @@ use sb3_sqlite::{
     process_tx, upsert_account, AccountProfile,
 };
 
-
-
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::process::exit;
 
+use std::slice::Chunks;
 use std::{
     sync::mpsc::{self, Sender},
     time::Duration,
 };
 
-const BATCH_SIZE:usize = 2;
+const BATCH_SIZE: usize = 2;
 pub fn parse_tuple(tup: &str) -> Result<(u64, u64), std::string::ParseError> {
     let tup = tup.replace("(", "");
     let tup = tup.replace(")", "");
@@ -47,8 +46,6 @@ pub fn parse_tuple(tup: &str) -> Result<(u64, u64), std::string::ParseError> {
 #[derive(Debug, Parser)]
 #[clap(author, version, long_about=None)]
 pub struct Args {
-
-
     #[clap(takes_value = false, long)]
     producer: bool,
 
@@ -103,12 +100,12 @@ pub fn baseconsumer_init(
     let mut tpl = TopicPartitionList::new();
     tpl.add_partition_offset(topic, 0, rdkafka::Offset::Offset(offset_range[0] as i64))?;
     bconsumer.assign(&tpl)?;
-    println!("Got watermarks:{:?} ", bconsumer.fetch_watermarks(topic, 0, Duration::from_secs(3)));
+    println!(
+        "Got watermarks:{:?} ",
+        bconsumer.fetch_watermarks(topic, 0, Duration::from_secs(3))
+    );
     Ok(bconsumer)
 }
-
-
-
 
 pub fn threcho(msg: &str) {
     println!("[{:?}]: {}", std::thread::current().id(), msg);
@@ -155,9 +152,7 @@ pub fn block_extract_statistics(
     let transactions = block["transactions"]
         .as_array()
         .expect("Didn't find transactions");
-    let blockheight = block["blockHeight"]
-        .as_u64()
-        .unwrap_or(0);
+    let blockheight = block["blockHeight"].as_u64().unwrap_or(0);
     let blockhash = (block["blockhash"])
         .as_str()
         .expect("Didn't find blockhhash")
@@ -187,26 +182,28 @@ pub fn spawn_consumer_thread_in_scope<'a>(
     )>,
 ) -> Result<(), KafkaError> {
     crossbeam_scope.spawn(move |_| -> Result<(), BlockProcessingError> {
-
-        println!("Spawned consumer with halt_at_offset {:?}" , halt_at_offset);
+        println!("Spawned consumer with halt_at_offset {:?}", halt_at_offset);
         let mut first_processed_offset = -1;
-        let mut last_processed_offset = -1;
+        let mut last_processed_offset  = -1;
 
-        let mut threadwide_account_stats: BTreeMap<String,      AccountProfile> = BTreeMap::new();
-        let mut threadwide_blocks_stats: HashMap<(String, u64), u64>            = HashMap::new();
-        let mut processed_n_blocks                             = 0;
+        let mut threadwide_account_stats: BTreeMap<String, AccountProfile> = BTreeMap::new();
+        let mut threadwide_blocks_stats: HashMap<(String, u64), u64> = HashMap::new();
+        let mut processed_n_blocks = 0;
 
-        
         loop {
             // threcho("Polling.");
             match consumer.poll(Duration::from_millis(2000)) {
-                
                 Some(m) => {
                     let message = match m {
                         Ok(bm) => {
-                            let parsedval: Value                  = serde_json::from_slice::<Value>(&bm.payload().unwrap()).unwrap();
-                            let (accounts_stats, block_stats_row) = block_extract_statistics(parsedval)?;
-                                threadwide_account_stats          = merge_btree_maps(threadwide_account_stats, accounts_stats);
+                            let parsedval: Value =
+                                serde_json::from_slice::<Value>(&bm.payload().unwrap()).unwrap();
+
+                            let (accounts_stats, block_stats_row) =
+                                block_extract_statistics(parsedval)?;
+
+                            threadwide_account_stats =
+                                merge_btree_maps(threadwide_account_stats, accounts_stats);
 
                             threadwide_blocks_stats.insert(
                                 (block_stats_row.blockhash, block_stats_row.blockheight),
@@ -216,7 +213,7 @@ pub fn spawn_consumer_thread_in_scope<'a>(
 
                             if first_processed_offset == -1 {
                                 first_processed_offset = bm.offset();
-                            }else{
+                            } else {
                                 last_processed_offset = bm.offset();
                             }
                             bm
@@ -227,7 +224,10 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                     };
 
                     if message.offset() == halt_at_offset as i64 {
-                        threcho(&format!("Reached halt offset {}. Processed offsets {} to {}", halt_at_offset, first_processed_offset, last_processed_offset));
+                        threcho(&format!(
+                            "Reached halt offset {}. Processed offsets {} to {}",
+                            halt_at_offset, first_processed_offset, last_processed_offset
+                        ));
                         break;
                     }
                 }
@@ -236,8 +236,9 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                 }
             }
 
-            if processed_n_blocks > 0  && processed_n_blocks % BATCH_SIZE == 0 { 
-                send_to_master.send((threadwide_account_stats, threadwide_blocks_stats))
+            if processed_n_blocks > 0 && processed_n_blocks % BATCH_SIZE == 0 {
+                send_to_master
+                    .send((threadwide_account_stats, threadwide_blocks_stats))
                     .unwrap();
 
                 println!(
@@ -247,8 +248,8 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                 );
 
                 threadwide_account_stats = BTreeMap::new();
-                threadwide_blocks_stats  = HashMap::new();
-                processed_n_blocks         = 0;
+                threadwide_blocks_stats = HashMap::new();
+                processed_n_blocks = 0;
             }
         }
         Ok(())
@@ -256,14 +257,17 @@ pub fn spawn_consumer_thread_in_scope<'a>(
     Ok(())
 }
 
-
-
-pub struct Logfile{
-    pub filepath: String
+pub struct Logfile {
+    pub filepath: String,
 }
 
-pub fn get_logfile(name:&str)->File{
-    OpenOptions::new().write(true).append(true).create(true).open(name).unwrap()
+pub fn get_logfile(name: &str) -> File {
+    OpenOptions::new()
+        .write(true)
+        .append(true)
+        .create(true)
+        .open(name)
+        .unwrap()
 }
 
 fn main() {
@@ -274,12 +278,14 @@ fn main() {
     let topic_name   = &args.topic_name;
     let nthreads     = args.n_threads;
     let outputdb     = args.output_db;
-    let logfile_path = args.logfile.unwrap_or(format!("{}.log", chrono::offset::Local::now().format("%s")));
-    let startend     = args.start_end;
-    let timer        = timer::Timer::new();
-
+    let logfile_path = args
+        .logfile
+        .unwrap_or(format!("{}.log", chrono::offset::Local::now().format("%s")));
+    let startend = args.start_end;
+    let timer = timer::Timer::new();
 
     let mut logfile = get_logfile(&logfile_path);
+
     let (mpsc_sx, mpsc_rx) = mpsc::channel::<(
         BTreeMap<String, AccountProfile>,
         HashMap<(String, u64), u64>,
@@ -287,60 +293,64 @@ fn main() {
 
     // -------------------------------------------------------------------------------
     // create n_threads equal chunks ranging from start_end[0] to start_end[1]
-    let offsets = (startend.0..startend.1).collect::<Vec<u64>>();
-    let chunks = offsets.chunks(offsets.len() / nthreads as usize);
+    let offsets              = (startend.0..startend.1+1).collect::<Vec<u64>>();
+    let mut chunks_h:Vec<&[u64]> = offsets.chunks(offsets.len() / nthreads as usize).collect();
+    
+    println!()
+    // let chunks = offsets.chunks(offsets.len() / nthreads as usize);
+
     let consumer_group = &args
         .consumer_group
         .unwrap_or("default_consumer_group".to_string());
     // -------------------------------------------------------------------------------
-    let (mpsc_send, mpsc_receive) = mpsc::channel();
+    // let (mpsc_send, mpsc_receive) = mpsc::channel();
 
-    let _ = thread::scope(|s| -> Result<(), KafkaError> {
+    // let _ = thread::scope(|scope| -> Result<(), KafkaError> {
+    //     scope.spawn(move |_| {
+    //         let dbconn = create_statistics_tables(&outputdb)
+    //             .expect(&format!("Could not created sqlite file {}.", &outputdb));
+    //         loop {
+    //             match mpsc_receive.recv() {
+    //                 Ok(msg) => {
+    //                     let (accounts_map, blockstats_map): (
+    //                         BTreeMap<String, AccountProfile>,
+    //                         HashMap<(String, u64), u64>,
+    //                     ) = msg;
 
-        s.spawn(move |_| {
-            let dbconn = create_statistics_tables(&outputdb)
-                .expect(&format!("Could not created sqlite file {}.", &outputdb));
-            loop {
-                match mpsc_receive.recv() {
-                    Ok(msg) => {
-                        let (accounts_map, blockstats_map): (
-                            BTreeMap<String, AccountProfile>,
-                            HashMap<(String, u64), u64>,
-                        ) = msg;
+    //                     for (address, profile) in accounts_map.iter() {
+    //                         upsert_account(&dbconn, &address, &profile).map_err(|e|{
+    //                                 writeln!(logfile, "[{}] Error upserting account {} with account profile {:?}:\n{}",
+    //                                  chrono::Utc::now(),&address, &profile, e.to_string());
+    //                         });
+    //                     }
 
-                        for (address, profile) in accounts_map.iter() {
-                            match upsert_account(&dbconn, &address, &profile){
-                                Ok(())=>{},
-                                Err(e)=>{
-                                    writeln!(logfile)
-                                }
-                            }
-                        }
+    //                     for ((bhash, bheight), txcount) in blockstats_map.iter() {
+    //                         insert_block_stat(&dbconn, bhash, bheight, txcount).map_err(|e|{
+    //                                 writeln!(logfile, "[{}] Error inserting block {}/{} into db: \n{}",
+    //                                  chrono::Utc::now(), &bhash,&bheight, e.to_string());
+    //                         });
+    //                     }
+    //                 }
+    //                 Err(e) => {
+    //                     println!("{}", e);
+    //                     std::thread::sleep(Duration::from_secs(2));
+    //                 }
+    //             }
+    //         }
+    //     });
 
-                        for ((bhash, bheight), txcount) in blockstats_map.iter() {
-                            insert_block_stat(&dbconn, bhash, bheight, txcount).unwrap();
-                        }
-                    }
-                    Err(e) => {
-                        println!("{}", e);
-                        std::thread::sleep(Duration::from_secs(2));
-                    }
-                }
-            }
-        });
+    //     for chunk in chunks {
+    //         let bconsumer = baseconsumer_init(*port, consumer_group, chunk, &topic_name)?;
+    //         println!("Received  [{}] watermarks for topic : {:?}", &topic_name, bconsumer.fetch_watermarks(&topic_name, 0, Duration::from_secs(10))?);
 
-        for chunk in chunks {
-            let bconsumer = baseconsumer_init(*port, consumer_group, chunk, &topic_name)?;
-            println!("Received  [{}] watermarks for topic : {:?}", &topic_name, bconsumer.fetch_watermarks(&topic_name, 0, Duration::from_secs(10))?);
-            let _ = spawn_consumer_thread_in_scope(
-                bconsumer,
-                chunk[chunk.len() - 1],
-                s,
-                mpsc_send.clone(),
-            );
-        }
-        Ok(())
-    })
-    .unwrap();
-
+    //         let _ = spawn_consumer_thread_in_scope(
+    //             bconsumer,
+    //             chunk[chunk.len()-1],
+    //             scope,
+    //             mpsc_send.clone(),
+    //         );
+    //     }
+    //     Ok(())
+    // })
+    // .unwrap();
 }
