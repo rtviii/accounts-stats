@@ -293,10 +293,25 @@ fn main() {
 
     // -------------------------------------------------------------------------------
     // create n_threads equal chunks ranging from start_end[0] to start_end[1]
-    let offsets              = (startend.0..startend.1+1).collect::<Vec<u64>>();
-    let mut chunks_h:Vec<&[u64]> = offsets.chunks(offsets.len() / nthreads as usize).collect();
-    
-    println!()
+    let offsets = (startend.0..startend.1+1).collect::<Vec<u64>>();
+    let chunks  = offsets.chunks(offsets.len()/nthreads as usize );
+    let mut split   = chunks.map(|c|{ c.to_vec().to_owned() }).collect::<Vec<_>>();
+
+    if split[split.len()-2].len() != split[split.len()-1].len(){
+        let last    = split.pop().unwrap();
+        let prelast = split.pop().unwrap();
+        let mut merged = [
+            last.as_slice()  ,
+            prelast.as_slice()].concat();
+        merged.sort();
+        split.push(merged);
+    }
+    println!("{:?}", split);
+
+
+    // let mut chunks_h:Vec<&[u64]> = offsets.chunks(offsets.len() / nthreads as usize).collect();
+    // chunks_h[0] =  &[ chunks_h.get(0).unwrap().to_owned(), chunks_h.get(2).unwrap().to_owned()];
+    // println!("{:?}", chunks_h);
     // let chunks = offsets.chunks(offsets.len() / nthreads as usize);
 
     let consumer_group = &args
