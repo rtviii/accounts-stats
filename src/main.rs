@@ -27,7 +27,7 @@ use std::{
     time::Duration,
 };
 
-const BATCH_SIZE:usize = 20;
+const BATCH_SIZE:usize = 2;
 pub fn parse_tuple(tup: &str) -> Result<(u64, u64), std::string::ParseError> {
     let tup = tup.replace("(", "");
     let tup = tup.replace(")", "");
@@ -153,7 +153,7 @@ fn main() {
 
         for chunk in chunks {
             let bconsumer = baseconsumer_init(*port, consumer_group, chunk, &topic_name)?;
-            println!("Watermarks : {:?}", bconsumer.fetch_watermarks(&topic_name, 0, Duration::from_secs(10))?);
+            println!("Received  [{}] watermarks for topic : {:?}", &topic_name, bconsumer.fetch_watermarks(&topic_name, 0, Duration::from_secs(10))?);
             let _ = spawn_consumer_thread_in_scope(
                 bconsumer,
                 chunk[chunk.len() - 1],
@@ -246,42 +246,39 @@ pub fn spawn_consumer_thread_in_scope<'a>(
     crossbeam_scope.spawn(move |_| -> Result<(), BlockProcessingError> {
 
         println!("Spawned consumer with halt_at_offset {:?}" , halt_at_offset);
+        let mut first_processed_offset = -1;
+        let mut last_processed_offset = -1;
 
         let mut threadwide_account_stats: BTreeMap<String,      AccountProfile> = BTreeMap::new();
         let mut threadwide_blocks_stats: HashMap<(String, u64), u64>            = HashMap::new();
-        let mut processed_blocks                               = 1;
+        let mut processed_n_blocks                             = 0;
 
         
         loop {
-            threcho("Polling.");
+            // threcho("Polling.");
             match consumer.poll(Duration::from_millis(2000)) {
                 
                 Some(m) => {
-                    println!("Got Some");
                     let message = match m {
                         Ok(bm) => {
 
-                            println!("Got offset {}", bm.offset());
 
-                            let parsedval: Value =
-                                serde_json::from_slice::<Value>(&bm.payload().unwrap()).unwrap();
-                            let (accounts_stats, block_stats_row) =
-                                block_extract_statistics(parsedval)?;
 
-                            threadwide_account_stats =
-                                merge_btree_maps(threadwide_account_stats, accounts_stats);
+                            let parsedval: Value                  = serde_json::from_slice::<Value>(&bm.payload().unwrap()).unwrap();
+                            let (accounts_stats, block_stats_row) = block_extract_statistics(parsedval)?;
+                                threadwide_account_stats          = merge_btree_maps(threadwide_account_stats, accounts_stats);
 
                             threadwide_blocks_stats.insert(
                                 (block_stats_row.blockhash, block_stats_row.blockheight),
                                 block_stats_row.txnum,
                             );
+                            processed_n_blocks += 1;
 
-                            processed_blocks += 1;
-                            println!(
-                                "[{:?}] Processed blocks {}",
-                                std::thread::current().id(),
-                                processed_blocks
-                            );
+                            if first_processed_offset == -1 {
+                                first_processed_offset = bm.offset();
+                            }else{
+                                last_processed_offset = bm.offset();
+                            }
                             bm
                         }
                         Err(e) => {
@@ -290,7 +287,7 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                     };
 
                     if message.offset() == halt_at_offset as i64 {
-                        println!("Consumer reached halt offset {}", halt_at_offset);
+                        threcho(&format!("Reached halt offset {}. Processed offsets {} to {}", halt_at_offset, first_processed_offset, last_processed_offset));
                         break;
                     }
                 }
@@ -299,18 +296,19 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                 }
             }
 
-            if processed_blocks % BATCH_SIZE == 0 {
-                send_to_master
-                    .send((threadwide_account_stats, threadwide_blocks_stats))
+            if processed_n_blocks > 0  && processed_n_blocks % BATCH_SIZE == 0 { 
+                send_to_master.send((threadwide_account_stats, threadwide_blocks_stats))
                     .unwrap();
+
                 println!(
                     "[{:?}] Processed {} blocks. Sending batch to master.",
                     std::thread::current().id(),
                     BATCH_SIZE
                 );
+
                 threadwide_account_stats = BTreeMap::new();
-                threadwide_blocks_stats = HashMap::new();
-                processed_blocks = 1;
+                threadwide_blocks_stats  = HashMap::new();
+                processed_n_blocks         = 0;
             }
         }
         Ok(())
