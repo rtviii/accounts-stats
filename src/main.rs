@@ -31,7 +31,7 @@ use std::{
     time::Duration,
 };
 
-const BATCH_SIZE: usize = 2;
+const BATCH_SIZE: usize = 5000;
 pub fn parse_tuple(tup: &str) -> Result<(u64, u64), std::string::ParseError> {
     let tup = tup.replace("(", "");
     let tup = tup.replace(")", "");
@@ -365,10 +365,10 @@ fn main() {
             );
         }
         Ok(())
-    }).unwrap();
-    
-    // .map_err(|e|{
-    //     do_log(&mut logfile_main,&format!("Error in consumer threads"));
-    // });
+    }).map_err(|e|{
+        let mut lg = get_logfile(logfile_path.as_str());
+        do_log(&mut lg,&format!("Error in consumer threads"));
+
+    });
     
 }
