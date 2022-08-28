@@ -188,6 +188,7 @@ pub fn spawn_consumer_thread_in_scope<'a>(
         let mut last_processed_offset  = -1;
         let mut loghandle =  get_logfile(&logfile_path);
 
+
         let mut threadwide_account_stats: BTreeMap<String, AccountProfile> = BTreeMap::new();
         let mut threadwide_blocks_stats: HashMap<(String, u64), u64> = HashMap::new();
         let mut processed_n_blocks = 0;
@@ -198,7 +199,7 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                 Some(m) => {
                     let message = match m {
                         Ok(bm) => {
-                            let parsedval: Value =
+                            let block: Value =
                                 serde_json::from_slice::<Value>(&bm.payload().unwrap_or_else(||{
 
                                     // let l = get_logfile(logfile_path);
@@ -208,13 +209,6 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                                     Value::Null
                                 });
 
-                            let (accounts_stats, block_stats_row) = block_extract_statistics(parsedval)?;
-                                threadwide_account_stats          = merge_btree_maps(threadwide_account_stats, accounts_stats);
-
-                            threadwide_blocks_stats.insert(
-                                (block_stats_row.blockhash, block_stats_row.blockheight),
-                                block_stats_row.txnum,
-                            );
                             processed_n_blocks += 1;
 
                             if first_processed_offset == -1 {
@@ -222,7 +216,22 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                             } else {
                                 last_processed_offset = bm.offset();
                             }
+
+                        let transactions = block["transactions"]
+                            .as_array()
+                            .expect("Didn't find transactions");
+                        let blockheight = block["blockHeight"].as_u64().unwrap_or(0);
+                        let blockhash = (block["blockhash"])
+                            .as_str()
+                            .expect("Didn't find blockhhash")
+                            .to_string();
+                            let tx = transactions.len();
+                            println!("This block has {} transactions", tx);
+                            
+                            println!("Rewards are nonempty");                   //<-----------
+
                             bm
+
                         }
                         Err(e) => {
                             panic!("Message receive error! {}", e);
@@ -322,6 +331,7 @@ fn main() {
     let (mpsc_send, mpsc_receive) = mpsc::channel();
 
     let _ = thread::scope(|scope| -> Result<(), KafkaError> {
+
         scope.spawn(move |_| {
             let dbconn = create_statistics_tables(&outputdb)
                 .expect(&format!("Could not created sqlite file {}.", &outputdb));
