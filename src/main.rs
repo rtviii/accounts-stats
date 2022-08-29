@@ -220,15 +220,32 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                         let transactions = block["transactions"]
                             .as_array()
                             .expect("Didn't find transactions");
+
+
+                            for tx in transactions{
+                                let sig  = tx["transaction"]["signatures"].as_array().unwrap();
+                                let meta = tx["meta"].as_object().expect("no meta in tx");
+                                let rwd  = meta["rewards"].as_array();
+
+                                println!("sigs {:?}", sig);
+                                println!("meta rewards {:?}", rwd);
+
+
+                            }
+
+
+
+
                         let blockheight = block["blockHeight"].as_u64().unwrap_or(0);
-                        let blockhash = (block["blockhash"])
+                        let blockhash   = (block["blockhash"])
                             .as_str()
                             .expect("Didn't find blockhhash")
                             .to_string();
+
                             let tx = transactions.len();
+
                             println!("This block has {} transactions", tx);
-                            
-                            println!("Rewards are nonempty");                   //<-----------
+                            println!("Rewards are nonempty");                   
 
                             bm
 
@@ -382,3 +399,13 @@ fn main() {
     });
     
 }
+
+// find blocks with nonempy rewards (at the beginning or end of an epoch?) current:
+// Block height: 133708650
+// Slot: 148119983
+// Epoch: 342
+// Transaction Count: 94375153978
+// Epoch Slot Range: [147744000..148176000)
+// Epoch Completed Percent: 87.033%
+// Epoch Completed Slots: 375983/432000 (56017 remaining)
+// Epoch Completed Time: 2days 9h 10m 25s/2days 17h 58m 50s (8h 48m 25s remaining)
