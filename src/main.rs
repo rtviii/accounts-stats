@@ -145,6 +145,18 @@ pub struct BlockStatsRow {
     blockheight: u64,
     txnum: u64,
 }
+
+pub fn rewards_nonempty (rewards: &Vec<Value>) -> bool {
+    for r in rewards.iter() {
+        if r["reward"]["amount"].as_u64().unwrap() > 0 {
+            return true;
+        }
+    }
+    false
+}
+
+
+
 pub fn block_extract_statistics(
     block: Value,
 ) -> Result<(BTreeMap<String, AccountProfile>, BlockStatsRow), BlockProcessingError> {
@@ -152,6 +164,7 @@ pub fn block_extract_statistics(
     let transactions = block["transactions"]
         .as_array()
         .expect("Didn't find transactions");
+
     let blockheight = block["blockHeight"].as_u64().unwrap_or(0);
     let blockhash = (block["blockhash"])
         .as_str()
@@ -188,7 +201,6 @@ pub fn spawn_consumer_thread_in_scope<'a>(
         let mut last_processed_offset  = -1;
         let mut loghandle =  get_logfile(&logfile_path);
 
-
         let mut threadwide_account_stats: BTreeMap<String, AccountProfile> = BTreeMap::new();
         let mut threadwide_blocks_stats: HashMap<(String, u64), u64> = HashMap::new();
         let mut processed_n_blocks = 0;
@@ -201,7 +213,6 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                         Ok(bm) => {
                             let block: Value =
                                 serde_json::from_slice::<Value>(&bm.payload().unwrap_or_else(||{
-
                                     // let l = get_logfile(logfile_path);
                                     &[]
                                 })).unwrap_or_else(|_|{
@@ -221,19 +232,17 @@ pub fn spawn_consumer_thread_in_scope<'a>(
                             .as_array()
                             .expect("Didn't find transactions");
 
-
-                            for tx in transactions{
-                                let sig  = tx["transaction"]["signatures"].as_array().unwrap();
-                                let meta = tx["meta"].as_object().expect("no meta in tx");
+                            for item in transactions{
+                                let sig  = item["transaction"]["signatures"].as_array().unwrap();
+                                let meta = item["meta"].as_object().expect("no meta in tx");
                                 let rwd  = meta["rewards"].as_array();
 
                                 println!("sigs {:?}", sig);
-                                println!("meta rewards {:?}", rwd);
+                                println!("rewards {:?}", rwd);
+                                println!("meta {:?}", meta);
 
 
                             }
-
-
 
 
                         let blockheight = block["blockHeight"].as_u64().unwrap_or(0);
@@ -301,9 +310,10 @@ pub fn get_logfile(name: &str) -> File {
         .open(name)
         .unwrap()
 }
+
+
 pub fn do_log(logfile: &mut File, msg: &str) {
-    writeln!(logfile, "[{}] {}",
-    chrono::Utc::now(),msg);
+    writeln!(logfile, "[{}] {}",chrono::Utc::now(),msg);
 }
 
 fn main() {
@@ -314,10 +324,13 @@ fn main() {
     let topic_name   = &args.topic_name;
     let nthreads     = args.n_threads;
     let outputdb     = args.output_db;
+
     let logfile_path = args
         .logfile
         .unwrap_or(format!("{}.log", chrono::offset::Local::now().format("%s")));
+
     let startend = args.start_end;
+
     let timer = timer::Timer::new();
 
     let mut logfile_main = get_logfile(&logfile_path);
@@ -361,16 +374,19 @@ fn main() {
                         ) = msg;
 
                         for (address, profile) in accounts_map.iter() {
+
                             upsert_account(&dbconn, &address, &profile).map_err(|e|{
-                                do_log(&mut logfile_main,
-                                     &format!("Error upserting account {} with account profile {:?}:\n{}", &address, &profile, e.to_string()))
+                                do_log(&mut logfile_main,&format!("Error upserting account {} with account profile {:?}:\n{}", &address, &profile, e.to_string()))
                             });
                         }
 
+
                         for ((bhash, bheight), txcount) in blockstats_map.iter() {
-                            insert_block_stat(&dbconn, bhash, bheight, txcount).map_err(|e|{
-                            do_log(&mut logfile_main,&format!("Error inserting block {}/{} into db: \n{}",&bhash,&bheight, e.to_string()));
+
+                            insert_block_stat(&dbconn, bhash, bheight, txcount).map_err(|e|{ 
+                                do_log(&mut logfile_main,&format!("Error inserting block {}/{} into db: \n{}",&bhash,&bheight, e.to_string()));
                             });
+
                         }
                     }
                     Err(e) => {
@@ -395,10 +411,16 @@ fn main() {
     }).map_err(|e|{
         let mut lg = get_logfile(logfile_path.as_str());
         do_log(&mut lg,&format!("Error in consumer threads"));
-
     });
     
 }
+
+
+// Find blocks with outlier transactions
+// unempty rewrads txs write out
+
+
+
 
 // find blocks with nonempy rewards (at the beginning or end of an epoch?) current:
 // Block height: 133708650
@@ -409,3 +431,4 @@ fn main() {
 // Epoch Completed Percent: 87.033%
 // Epoch Completed Slots: 375983/432000 (56017 remaining)
 // Epoch Completed Time: 2days 9h 10m 25s/2days 17h 58m 50s (8h 48m 25s remaining)
+
